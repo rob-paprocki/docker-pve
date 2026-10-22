@@ -1,0 +1,11 @@
+# Editor / OS cruft.
+*.swp
+*.swo
+*~
+*.bak
+.DS_Store
+Thumbs.db
+
+# Local test artifacts a dev might leave behind running this script locally.
+*.qcow2
+/tmp/
