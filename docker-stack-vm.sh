@@ -43,6 +43,7 @@ GEN_MAC=02:$(openssl rand -hex 5 | awk '{print toupper($0)}' | sed 's/\(..\)/\1:
 MAC="$GEN_MAC"
 VLAN=""
 MTU=""
+CPU_TYPE=""
 METHOD=""
 NSAPP="docker-vm"
 var_os="debian"

@@ -43,7 +43,7 @@ The VM also gets:
 **Default** mode just prompts for a root password; everything else uses defaults (25 GB disk, 2 cores, 4 GiB RAM, DHCP, i440fx, EFI, VirtIO SCSI, SSH off for root). **Advanced** mode also asks for:
 
 * VMID, machine type (i440fx or q35, both EFI with a 4 MiB vars store), disk size, hostname
-* CPU cores, RAM, bridge, VLAN tag, MAC address
+* CPU cores, RAM, bridge, MAC address
 * IPv6 on/off (sysctl inside the guest)
 * Watchtower notification URL (any shoutrrr URL — `discord://…`, `slack://…`, `telegram://…`, `gotify://…`)
 * Root password
