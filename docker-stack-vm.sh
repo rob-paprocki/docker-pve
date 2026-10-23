@@ -1,10 +1,26 @@
 #!/usr/bin/env bash
-
+#
+# docker-stack-vm.sh — provision a Debian 13 VM on Proxmox VE pre-loaded with
+# Docker + Dockge + Portainer + Watchtower.
+#
+# Adapted from the community-scripts/ProxmoxVE helper-script pattern
+# (https://github.com/community-scripts/ProxmoxVE) — the whiptail UI,
+# get_valid_nextid helper, and api.func sourcing come from that project.
+#
 # Copyright (c) 2021-2025 community-scripts ORG
-# Author: Rob Paprocki | Co-Author: Google Gemini
-# License: MIT
+# Copyright (c) 2025 Rob Paprocki
+# Co-Author: Google Gemini
+# License: MIT (see LICENSE)
+#
+# WARNING: this script sources community-scripts/ProxmoxVE main-branch bash
+# at runtime (api.func, for anonymous telemetry). The README documents the
+# trust model; set DIAGNOSTICS=no in the environment to disable the uploads.
 
-source /dev/stdin <<<$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func)
+API_FUNC_SRC=$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) \
+  || { echo "ERROR: could not fetch community-scripts/ProxmoxVE api.func" >&2; exit 1; }
+[ -n "$API_FUNC_SRC" ] || { echo "ERROR: api.func fetch returned empty payload" >&2; exit 1; }
+source /dev/stdin <<< "$API_FUNC_SRC"
+unset API_FUNC_SRC
 
 function header_info() {
   clear
@@ -27,12 +43,19 @@ GEN_MAC=02:$(openssl rand -hex 5 | awk '{print toupper($0)}' | sed 's/\(..\)/\1:
 MAC="$GEN_MAC"
 VLAN=""
 MTU=""
-RANDOM_UUID="$(cat /proc/sys/kernel/random/uuid)"
+CPU_TYPE=""
 METHOD=""
 NSAPP="docker-vm"
 var_os="debian"
 var_version="13"
 DISK_SIZE="25G"
+SCRIPT_VERSION="2025.10"
+
+# Container image tags, bumpable in one place.
+DOCKGE_TAG="${DOCKGE_TAG:-1.5.0}"
+PORTAINER_CE_TAG="${PORTAINER_CE_TAG:-2.45.3}"
+PORTAINER_AGENT_TAG="${PORTAINER_AGENT_TAG:-2.45.3}"
+WATCHTOWER_TAG="${WATCHTOWER_TAG:-1.7.1}"
 
 YW=$(echo "\033[33m")
 BL=$(echo "\033[36m")
@@ -40,8 +63,6 @@ RD=$(echo "\033[01;31m")
 BGN=$(echo "\033[4;92m")
 GN=$(echo "\033[1;92m")
 DGN=$(echo "\033[32m")
-CL=$(echo "\033[m")
-
 CL=$(echo "\033[m")
 BOLD=$(echo "\033[1m")
 BFR="\\r\\033[K"
@@ -68,11 +89,11 @@ ADVANCED="${TAB}🧩${TAB}${CL}"
 CLOUD="${TAB}☁️${TAB}${CL}"
 
 THIN="discard=on,ssd=1,"
-set -e
+set -Eeuo pipefail
 trap 'error_handler $LINENO "$BASH_COMMAND"' ERR
 trap cleanup EXIT
-trap 'post_update_to_api "failed" "INTERRUPTED"' SIGINT
-trap 'post_update_to_api "failed" "TERMINATED"' SIGTERM
+trap 'post_update_to_api "failed" "INTERRUPTED"; exit 130' SIGINT
+trap 'post_update_to_api "failed" "TERMINATED"; exit 143' SIGTERM
 function error_handler() {
   local exit_code="$?"
   local line_number="$1"
@@ -101,16 +122,16 @@ function get_valid_nextid() {
 }
 
 function cleanup_vmid() {
-  if qm status $VMID &>/dev/null; then
-    qm stop $VMID &>/dev/null
-    qm destroy $VMID &>/dev/null
+  if [ -n "${VMID:-}" ] && qm status "$VMID" &>/dev/null; then
+    qm stop "$VMID" &>/dev/null || true
+    qm destroy "$VMID" &>/dev/null || true
   fi
 }
 
 function cleanup() {
-  popd >/dev/null
-  post_update_to_api "done" "none"
-  rm -rf $TEMP_DIR
+  popd &>/dev/null || true
+  command -v post_update_to_api &>/dev/null && post_update_to_api "done" "none" || true
+  [ -n "${TEMP_DIR:-}" ] && rm -rf "$TEMP_DIR"
 }
 
 TEMP_DIR=$(mktemp -d)
@@ -159,8 +180,8 @@ pve_check() {
   fi
   if [[ "$PVE_VER" =~ ^9\.([0-9]+) ]]; then
     local MINOR="${BASH_REMATCH[1]}"
-    if ((MINOR != 0)); then
-      msg_error "This version of Proxmox VE is not yet supported."
+    if ((MINOR < 0 || MINOR > 9)); then
+      msg_error "This version of Proxmox VE is not supported."
       exit 1
     fi
     return 0
@@ -213,8 +234,6 @@ function default_settings() {
   METHOD="default"
   ENABLE_ROOT_SSH="no"
   ENABLE_IPV6="yes"
-  STATIC_IP=""
-  GATEWAY_IP=""
   echo -e "${CONTAINERID}${BOLD}${DGN}Virtual Machine ID: ${BGN}${VMID}${CL}"
   echo -e "${CONTAINERTYPE}${BOLD}${DGN}Machine Type: ${BGN}i440fx${CL}"
   echo -e "${DISKSIZE}${BOLD}${DGN}Disk Size: ${BGN}${DISK_SIZE}${CL}"
@@ -256,12 +275,11 @@ function advanced_settings() {
   done
 
   if MACH=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "MACHINE TYPE" --radiolist --cancel-button Exit-Script "Choose Type" 10 58 2 "i440fx" "" ON "q35" "" OFF 3>&1 1>&2 2>&3); then
-    if [ $MACH = q35 ]; then
+    FORMAT=",efitype=4m"
+    if [ "$MACH" = q35 ]; then
       MACHINE=" -machine q35"
-      FORMAT=""
     else
       MACHINE=""
-      FORMAT=",efitype=4m"
     fi
     echo -e "${CONTAINERTYPE}${BOLD}${DGN}Machine Type: ${BGN}$MACH${CL}"
   else
@@ -280,7 +298,7 @@ function advanced_settings() {
   else
     exit-script
   fi
-  
+
   if VM_NAME=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set Hostname" 8 58 docker --title "HOSTNAME" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
     HN=${VM_NAME:-docker}
     HN=$(echo ${HN,,} | tr -d ' ')
@@ -300,7 +318,7 @@ function advanced_settings() {
   BRG=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set a Bridge" 8 58 vmbr0 --title "BRIDGE" --cancel-button Exit-Script 3>&1 1>&2 2>&3) || exit-script
   BRG=${BRG:-vmbr0}
   echo -e "${BRIDGE}${BOLD}${DGN}Bridge: ${BGN}$BRG${CL}"
-  
+
   if MAC=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set MAC Address (leave blank for auto)" 8 58 "$GEN_MAC" --title "MAC ADDRESS" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
     if [ -z "$MAC" ]; then
       MAC="$GEN_MAC"
@@ -316,23 +334,7 @@ function advanced_settings() {
     ENABLE_IPV6="no"
   fi
   echo -e "${GATEWAY}${BOLD}${DGN}IPv6 Enabled: ${BGN}$ENABLE_IPV6${CL}"
-
-  if STATIC_IP=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set Static IPv4 Address (e.g., 192.168.1.50/24)\nLeave blank for DHCP." 10 60 --title "STATIC IPv4 ADDRESS" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
-    if [ -n "$STATIC_IP" ]; then
-      if ! GATEWAY_IP=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set Gateway IP Address" 8 58 --title "GATEWAY IP ADDRESS" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
-        exit-script
-      fi
-    fi
-  else
-    exit-script
-  fi
-  
-  if [ -n "$STATIC_IP" ]; then
-    echo -e "${GATEWAY}${BOLD}${DGN}Static IP: ${BGN}$STATIC_IP${CL}"
-    echo -e "${GATEWAY}${BOLD}${DGN}Gateway: ${BGN}$GATEWAY_IP${CL}"
-  else
-    echo -e "${GATEWAY}${BOLD}${DGN}Network: ${BGN}DHCP${CL}"
-  fi
+  echo -e "${GATEWAY}${BOLD}${DGN}Network: ${BGN}DHCP${CL} (set a reservation on your DHCP server, or edit the VM after boot)"
 
   if NOTIFICATION_URL=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter Watchtower Notification URL (optional)\nExample: gotify://gotify.example.com/xxxx" 10 78 --title "NOTIFICATION URL" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
      if [ -z "$NOTIFICATION_URL" ]; then
@@ -393,10 +395,14 @@ arch_check
 pve_check
 ssh_check
 
-msg_info "Detecting Timezone from IP"
-TIMEZONE=$(curl -s https://ipapi.co/timezone)
+msg_info "Detecting Timezone from host"
+TIMEZONE=$(timedatectl show -p Timezone --value 2>/dev/null | tr -d '[:space:]')
 if [ -z "$TIMEZONE" ]; then
-    msg_error "Could not detect timezone. Defaulting to UTC."
+    TIMEZONE=$(tr -d '[:space:]' </etc/timezone 2>/dev/null || true)
+fi
+# Reject anything that is not a plausible IANA tz identifier.
+if ! [[ "$TIMEZONE" =~ ^[A-Za-z]+(/[A-Za-z_+-]+)+$ || "$TIMEZONE" == "UTC" ]]; then
+    msg_error "Could not read a valid host timezone. Defaulting to UTC."
     TIMEZONE="Etc/UTC"
 else
     msg_ok "Timezone detected as ${CL}${BL}$TIMEZONE${CL}"
@@ -454,11 +460,13 @@ btrfs)
   THIN=""
   ;;
 esac
-for i in {0,1}; do
-  disk="DISK$i"
-  eval DISK${i}=vm-${VMID}-disk-${i}${DISK_EXT:-}
-  eval DISK${i}_REF=${STORAGE}:${DISK_REF:-}${!disk}
+for i in 0 1; do
+  disk_name="vm-${VMID}-disk-${i}${DISK_EXT:-}"
+  disk_ref="${STORAGE}:${DISK_REF:-}${disk_name}"
+  declare "DISK${i}=${disk_name}"
+  declare "DISK${i}_REF=${disk_ref}"
 done
+unset disk_name disk_ref
 
 if ! command -v virt-customize &>/dev/null; then
   msg_info "Installing Pre-Requisite libguestfs-tools"
@@ -470,9 +478,10 @@ fi
 msg_info "Creating Docker stack configuration files"
 # Dockge Compose File
 cat <<EOF >"$TEMP_DIR/dockge-compose.yml"
+name: dockge
 services:
   dockge:
-    image: louislam/dockge:1
+    image: louislam/dockge:${DOCKGE_TAG}
     container_name: dockge
     restart: unless-stopped
     ports:
@@ -484,8 +493,10 @@ services:
     environment:
       - DOCKGE_STACKS_DIR=/opt/stacks
       - TZ=${TIMEZONE}
+    labels:
+      - com.centurylinklabs.watchtower.scope=dockge
   watchtower:
-    image: containrrr/watchtower
+    image: containrrr/watchtower:${WATCHTOWER_TAG}
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -496,15 +507,22 @@ services:
       - WATCHTOWER_SCOPE=dockge
       - TZ=${TIMEZONE}
     command: --schedule "0 0 4 * * *" --cleanup
+    labels:
+      - com.centurylinklabs.watchtower.scope=dockge
 EOF
 
-# Portainer Compose File with Agent
+# Portainer Compose File with Agent.
+# The agent exists so a remote Portainer can manage this VM via tcp/9001;
+# the local portainer-ce would reach docker.sock directly either way.
+# deploy.restart_policy is swarm-only — docker compose up ignores it — so
+# the restart behaviour is set at the service level with `restart:`.
 cat <<EOF >"$TEMP_DIR/portainer-compose.yml"
 name: portainer
 services:
   portainer-agent:
     container_name: portainer-agent
-    image: portainer/agent
+    image: portainer/agent:${PORTAINER_AGENT_TAG}
+    restart: unless-stopped
     ports:
       - 9001:9001
     volumes:
@@ -512,28 +530,21 @@ services:
       - /var/lib/docker/volumes:/var/lib/docker/volumes
     environment:
       - TZ=${TIMEZONE}
-    depends_on:
-      - portainer
     deploy:
       resources:
         limits:
           cpus: "0.5"
           memory: 1024M
-      restart_policy:
-        condition: unless-stopped
-        delay: 5s
-        window: 120s
   portainer:
     container_name: portainer
-    image: portainer/portainer-ce:latest
+    image: portainer/portainer-ce:${PORTAINER_CE_TAG}
+    restart: unless-stopped
     ports:
       - 8000:8000
       - 9443:9443
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - portainer_data:/data
-    networks:
-      - portainer_network
     environment:
       - TZ=${TIMEZONE}
     deploy:
@@ -541,13 +552,6 @@ services:
         limits:
           cpus: "0.5"
           memory: 1024M
-      restart_policy:
-        condition: unless-stopped
-        delay: 5s
-        window: 120s
-networks:
-  portainer_network:
-    driver: bridge
 volumes:
   portainer_data:
     name: portainer_data
@@ -581,35 +585,54 @@ EOF
 msg_ok "Created Docker stack configuration files successfully"
 
 msg_info "Customizing Debian 13 Qcow2 Disk Image"
-# Prepare customization commands
-virt_customize_cmd="virt-customize -q -a ${FILE}"
-virt_customize_cmd+=" --root-password password:${ROOT_PASSWORD}"
-virt_customize_cmd+=" --install qemu-guest-agent,apt-transport-https,ca-certificates,curl,gnupg,lsb-release,openssh-server"
-virt_customize_cmd+=" --hostname ${HN}"
-virt_customize_cmd+=" --run-command 'mkdir -p /opt/stacks/dockge'"
-virt_customize_cmd+=" --run-command 'mkdir -p /opt/stacks/portainer'"
-virt_customize_cmd+=" --upload $TEMP_DIR/dockge-compose.yml:/opt/stacks/dockge/docker-compose.yml"
-virt_customize_cmd+=" --upload $TEMP_DIR/portainer-compose.yml:/opt/stacks/portainer/docker-compose.yml"
-virt_customize_cmd+=" --upload $TEMP_DIR/initial-startup.sh:/usr/local/bin/initial-startup.sh"
-virt_customize_cmd+=" --upload $TEMP_DIR/initial-startup.service:/etc/systemd/system/initial-startup.service"
-virt_customize_cmd+=" --chmod 0755:/usr/local/bin/initial-startup.sh"
 
-# Add run commands based on user choices
+# Write the root password to a 0600 file inside the already-mode-0700
+# $TEMP_DIR so it never appears on virt-customize's command line (which
+# would leak via /proc/*/cmdline to any local non-root user) and so shell
+# metacharacters in the password cannot inject into eval.
+(
+  umask 077
+  printf '%s\n' "$ROOT_PASSWORD" > "$TEMP_DIR/rootpw"
+)
+
+# Build the virt-customize invocation as an argv array so each payload is
+# passed verbatim — no string concatenation, no eval, no re-parsing.
+# shellcheck disable=SC2054  # --install takes a comma-separated apt list; the commas are literal.
+cmd=(
+  virt-customize -q -a "$FILE"
+  --root-password "file:$TEMP_DIR/rootpw"
+  --install qemu-guest-agent,apt-transport-https,ca-certificates,curl,gnupg,lsb-release,openssh-server
+  --hostname "$HN"
+  --run-command 'mkdir -p /opt/stacks/dockge /opt/stacks/portainer'
+  # Create a non-root user so paired stacks (e.g. qbittorrent-vpn-docker)
+  # can run with PUID=1000/PGID=1000 instead of as root.
+  --run-command 'id deploy >/dev/null 2>&1 || useradd -u 1000 -m -s /bin/bash deploy'
+  --run-command 'getent group docker >/dev/null || groupadd docker; usermod -aG docker deploy || true'
+  --upload "$TEMP_DIR/dockge-compose.yml:/opt/stacks/dockge/docker-compose.yml"
+  --upload "$TEMP_DIR/portainer-compose.yml:/opt/stacks/portainer/docker-compose.yml"
+  --upload "$TEMP_DIR/initial-startup.sh:/usr/local/bin/initial-startup.sh"
+  --upload "$TEMP_DIR/initial-startup.service:/etc/systemd/system/initial-startup.service"
+  --chmod 0755:/usr/local/bin/initial-startup.sh
+)
+
 if [ "$ENABLE_ROOT_SSH" == "yes" ]; then
-  virt_customize_cmd+=" --run-command 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin yes/g\" /etc/ssh/sshd_config'"
+  cmd+=( --run-command 'sed -i "s/^#*PermitRootLogin.*/PermitRootLogin yes/g" /etc/ssh/sshd_config' )
 fi
 if [ "$ENABLE_IPV6" == "no" ]; then
-  virt_customize_cmd+=" --run-command 'echo \"net.ipv6.conf.all.disable_ipv6 = 1\" > /etc/sysctl.d/99-disable-ipv6.conf; echo \"net.ipv6.conf.default.disable_ipv6 = 1\" >> /etc/sysctl.d/99-disable-ipv6.conf'"
+  cmd+=( --run-command 'printf "net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1\n" > /etc/sysctl.d/99-disable-ipv6.conf' )
 fi
-virt_customize_cmd+=" --run-command 'mkdir -p /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg'"
-virt_customize_cmd+=" --run-command \"echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian trixie stable' > /etc/apt/sources.list.d/docker.list\""
-virt_customize_cmd+=" --run-command 'apt-get update -qq && apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin'"
-virt_customize_cmd+=" --run-command 'systemctl enable docker'"
-virt_customize_cmd+=" --run-command 'systemctl enable initial-startup.service'"
-virt_customize_cmd+=" --run-command 'echo -n > /etc/machine-id'"
 
-# Execute all customizations in one go
-eval $virt_customize_cmd >/dev/null
+cmd+=(
+  --run-command 'mkdir -p /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg'
+  --run-command "echo 'deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian trixie stable' > /etc/apt/sources.list.d/docker.list"
+  --run-command 'apt-get update -qq && apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin'
+  --run-command 'systemctl enable docker'
+  --run-command 'systemctl enable initial-startup.service'
+  --run-command 'echo -n > /etc/machine-id'
+)
+
+"${cmd[@]}" >/dev/null
+rm -f "$TEMP_DIR/rootpw"
 
 msg_ok "Customized image with Docker, Dockge, and Portainer successfully"
 
@@ -629,11 +652,6 @@ qm set $VMID \
   -scsi0 ${DISK1_REF},${THIN}size=${DISK_SIZE} \
   -boot order=scsi0 \
   -serial0 socket >/dev/null
-
-# Set static IP if provided
-if [ -n "$STATIC_IP" ] && [ -n "$GATEWAY_IP" ]; then
-  qm set $VMID --ipconfig0 ip=$STATIC_IP,gw=$GATEWAY_IP
-fi
 
 qm set $VMID --agent enabled=1 >/dev/null
 
