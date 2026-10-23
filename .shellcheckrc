@@ -1,0 +1,7 @@
+# SC2034 — "variable appears unused":
+#   Shellcheck can't follow the api.func file sourced at script start,
+#   which reads NSAPP, var_os, var_version, OS and friends. The UI icon
+#   constants that look unused (VLANTAG, CLOUD, …) are declared alongside
+#   the ones that are used, kept for parity with the community-scripts
+#   helper-script style this script is adapted from.
+disable=SC2034

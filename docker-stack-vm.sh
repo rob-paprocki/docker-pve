@@ -597,6 +597,7 @@ msg_info "Customizing Debian 13 Qcow2 Disk Image"
 
 # Build the virt-customize invocation as an argv array so each payload is
 # passed verbatim — no string concatenation, no eval, no re-parsing.
+# shellcheck disable=SC2054  # --install takes a comma-separated apt list; the commas are literal.
 cmd=(
   virt-customize -q -a "$FILE"
   --root-password "file:$TEMP_DIR/rootpw"
