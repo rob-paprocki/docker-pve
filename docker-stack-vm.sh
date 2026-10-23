@@ -16,8 +16,13 @@
 # at runtime (api.func, for anonymous telemetry). The README documents the
 # trust model; set DIAGNOSTICS=no in the environment to disable the uploads.
 
-API_FUNC_SRC=$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) \
-  || { echo "ERROR: could not fetch community-scripts/ProxmoxVE api.func" >&2; exit 1; }
+# Pinned to a specific commit so a compromise or breaking change on main
+# cannot land here silently. Verified to carry post_to_api_vm and
+# post_update_to_api (the only two functions this script calls). Bump
+# deliberately after reviewing the diff on community-scripts/ProxmoxVE.
+API_FUNC_REF="${API_FUNC_REF:-500a860faf7295e6dad20670d05e6400d18f66b0}"
+API_FUNC_SRC=$(curl -fsSL "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/${API_FUNC_REF}/misc/api.func") \
+  || { echo "ERROR: could not fetch community-scripts/ProxmoxVE api.func at ${API_FUNC_REF}" >&2; exit 1; }
 [ -n "$API_FUNC_SRC" ] || { echo "ERROR: api.func fetch returned empty payload" >&2; exit 1; }
 source /dev/stdin <<< "$API_FUNC_SRC"
 unset API_FUNC_SRC
@@ -55,7 +60,18 @@ SCRIPT_VERSION="2025.10"
 DOCKGE_TAG="${DOCKGE_TAG:-1.5.0}"
 PORTAINER_CE_TAG="${PORTAINER_CE_TAG:-2.45.3}"
 PORTAINER_AGENT_TAG="${PORTAINER_AGENT_TAG:-2.45.3}"
-WATCHTOWER_TAG="${WATCHTOWER_TAG:-1.7.1}"
+# containrrr/watchtower was archived December 2025; nicholas-fedor is the
+# active community fork, drop-in compatible on env/labels.
+WATCHTOWER_IMAGE="${WATCHTOWER_IMAGE:-ghcr.io/nicholas-fedor/watchtower}"
+WATCHTOWER_TAG="${WATCHTOWER_TAG:-v1.23.2}"
+# docker-socket-proxy fronts the monitor-only Portainer-scope watchtower
+# below so that a compromise there cannot reach the raw Docker socket.
+# POST is left off; CONTAINERS/IMAGES are on for read. Residual risk:
+# CVE-2026-78122 (GET /containers/{id}/archive|export|logs|top leak when
+# CONTAINERS=1) — still strictly better than a raw socket; fix tracked at
+# Tecnativa/docker-socket-proxy PR #183.
+SOCKET_PROXY_IMAGE="${SOCKET_PROXY_IMAGE:-ghcr.io/tecnativa/docker-socket-proxy}"
+SOCKET_PROXY_TAG="${SOCKET_PROXY_TAG:-0.5.0}"
 
 YW=$(echo "\033[33m")
 BL=$(echo "\033[36m")
@@ -234,6 +250,7 @@ function default_settings() {
   METHOD="default"
   ENABLE_ROOT_SSH="no"
   ENABLE_IPV6="yes"
+  AUTHORIZED_KEY=""
   echo -e "${CONTAINERID}${BOLD}${DGN}Virtual Machine ID: ${BGN}${VMID}${CL}"
   echo -e "${CONTAINERTYPE}${BOLD}${DGN}Machine Type: ${BGN}i440fx${CL}"
   echo -e "${DISKSIZE}${BOLD}${DGN}Disk Size: ${BGN}${DISK_SIZE}${CL}"
@@ -251,6 +268,9 @@ function default_settings() {
   else
     exit-script
   fi
+  # Default-mode reuses the root password for the Portainer admin to avoid
+  # a second prompt. Advanced mode asks separately.
+  PORTAINER_ADMIN_PASSWORD="$ROOT_PASSWORD"
   echo -e "${CREATING}${BOLD}${DGN}Creating a Docker VM using the above default settings${CL}"
 }
 
@@ -336,7 +356,7 @@ function advanced_settings() {
   echo -e "${GATEWAY}${BOLD}${DGN}IPv6 Enabled: ${BGN}$ENABLE_IPV6${CL}"
   echo -e "${GATEWAY}${BOLD}${DGN}Network: ${BGN}DHCP${CL} (set a reservation on your DHCP server, or edit the VM after boot)"
 
-  if NOTIFICATION_URL=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter Watchtower Notification URL (optional)\nExample: gotify://gotify.example.com/xxxx" 10 78 --title "NOTIFICATION URL" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+  if NOTIFICATION_URL=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter Watchtower Notification URL (optional)\nShoutrrr URL, any scheme: ntfy://, gotify://, discord://, telegram://, smtp://.\nExample: ntfy://ntfy.example.com/updates" 11 78 --title "NOTIFICATION URL" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
      if [ -z "$NOTIFICATION_URL" ]; then
         echo -e "${INFO}${BOLD}${DGN}No notification URL provided.${CL}"
      else
@@ -352,6 +372,41 @@ function advanced_settings() {
       exit-script
     fi
     echo -e "${INFO}${BOLD}${DGN}Root password is set.${CL}"
+  else
+    exit-script
+  fi
+
+  # Portainer admin pre-seed closes the first-boot race where anyone on the
+  # network can reach http://${HN}:9443 before you do and claim the admin
+  # account. --admin-password-file reads this file as plaintext at first
+  # start only; it is ignored once an admin exists.
+  if PORTAINER_ADMIN_PASSWORD=$(whiptail --backtitle "Proxmox VE Helper Scripts" --passwordbox "Set a Portainer admin password (pre-seeded; closes the 5-min first-boot race)" 10 72 --title "PORTAINER ADMIN PASSWORD" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+    if [ -z "$PORTAINER_ADMIN_PASSWORD" ]; then
+      whiptail --msgbox "A Portainer admin password is required." 10 60
+      exit-script
+    fi
+    # Portainer rejects admin passwords shorter than 12 characters at first-boot.
+    if [ "${#PORTAINER_ADMIN_PASSWORD}" -lt 12 ]; then
+      whiptail --msgbox "Portainer requires the admin password to be at least 12 characters." 10 60
+      exit-script
+    fi
+    echo -e "${INFO}${BOLD}${DGN}Portainer admin password is set.${CL}"
+  else
+    exit-script
+  fi
+
+  # Optional SSH public key for the 'deploy' user (and root, when root SSH is
+  # enabled below). Keeping it empty leaves password-only auth in place.
+  if AUTHORIZED_KEY=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Paste an SSH public key for the 'deploy' user (optional, leave blank to skip).\nExample: ssh-ed25519 AAAA... user@host" 11 78 --title "SSH AUTHORIZED KEY" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+    AUTHORIZED_KEY=$(echo "$AUTHORIZED_KEY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    if [ -z "$AUTHORIZED_KEY" ]; then
+      echo -e "${INFO}${BOLD}${DGN}No SSH authorized key provided.${CL}"
+    elif ! [[ "$AUTHORIZED_KEY" =~ ^(ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\  ]]; then
+      whiptail --msgbox "That does not look like an OpenSSH public key (expected 'ssh-ed25519 AAAA...' or similar). Leaving SSH key empty." 10 72
+      AUTHORIZED_KEY=""
+    else
+      echo -e "${INFO}${BOLD}${DGN}SSH authorized key set.${CL}"
+    fi
   else
     exit-script
   fi
@@ -445,6 +500,27 @@ echo -en "\e[1A\e[0K"
 FILE=$(basename $URL)
 msg_ok "Downloaded ${CL}${BL}${FILE}${CL}"
 
+# Integrity check against the published SHA512SUMS (not authenticity:
+# Debian's cloud team does not sign per-distribution images consistently,
+# so a GPG verify would be security theatre here). Protects against on-disk
+# corruption and partial downloads; HTTPS covers the authenticity leg.
+msg_info "Verifying ${FILE} integrity (SHA512SUMS)"
+SUMS_URL="$(dirname "$URL")/SHA512SUMS"
+curl -fsSL -o SHA512SUMS "$SUMS_URL" \
+  || { msg_error "Could not fetch SHA512SUMS from ${SUMS_URL}"; exit 1; }
+# -F ' ' then $1 anchors the exact filename, no partial matches.
+expected_sum=$(awk -v f="$FILE" '$2 ~ ("^[*]?" f "$") {print $1; exit}' SHA512SUMS)
+if [ -z "$expected_sum" ]; then
+  msg_error "SHA512SUMS has no entry for ${FILE} — refusing to continue"
+  exit 1
+fi
+actual_sum=$(sha512sum "$FILE" | awk '{print $1}')
+if [ "$expected_sum" != "$actual_sum" ]; then
+  msg_error "SHA512 mismatch for ${FILE} — refusing to continue"
+  exit 1
+fi
+msg_ok "Verified ${FILE} integrity"
+
 STORAGE_TYPE=$(pvesm status -storage "$STORAGE" | awk 'NR>1 {print $2}')
 case $STORAGE_TYPE in
 nfs | dir)
@@ -477,6 +553,18 @@ fi
 
 msg_info "Creating Docker stack configuration files"
 # Dockge Compose File
+#
+# Two Watchtower instances with distinct scopes:
+#   - watchtower (scope=dockge) auto-updates Dockge, itself, and the stacks
+#     Dockge manages. Needs the raw Docker socket because container updates
+#     require POST /containers/create (recreate), which the socket proxy
+#     would also have to allow — so the proxy would not meaningfully reduce
+#     this instance's authority.
+#   - watchtower-portainer (scope=portainer, --monitor-only) ONLY notifies
+#     when Portainer or portainer-agent have an update available. Because
+#     it never writes, it talks to the Docker API through docker-socket-
+#     proxy with POST=0 — so even a full compromise cannot create or
+#     recreate containers.
 cat <<EOF >"$TEMP_DIR/dockge-compose.yml"
 name: dockge
 services:
@@ -496,7 +584,7 @@ services:
     labels:
       - com.centurylinklabs.watchtower.scope=dockge
   watchtower:
-    image: containrrr/watchtower:${WATCHTOWER_TAG}
+    image: ${WATCHTOWER_IMAGE}:${WATCHTOWER_TAG}
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -509,6 +597,51 @@ services:
     command: --schedule "0 0 4 * * *" --cleanup
     labels:
       - com.centurylinklabs.watchtower.scope=dockge
+  # Read-only Docker API facade: only CONTAINERS and IMAGES are exposed, and
+  # POST is denied, so clients talking through this proxy can inspect but
+  # not create, start, stop, or remove anything. Sits on an internal
+  # (egressless) bridge so only services on that network can reach it.
+  docker-socket-proxy:
+    image: ${SOCKET_PROXY_IMAGE}:${SOCKET_PROXY_TAG}
+    container_name: docker-socket-proxy
+    restart: unless-stopped
+    privileged: true
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+      - POST=0
+      - TZ=${TIMEZONE}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket-proxy
+    # Deliberately unscoped: pin and bump this one manually. Running the
+    # updater through the thing it is updating would guarantee an outage.
+  watchtower-portainer:
+    image: ${WATCHTOWER_IMAGE}:${WATCHTOWER_TAG}
+    container_name: watchtower-portainer
+    restart: unless-stopped
+    depends_on:
+      - docker-socket-proxy
+    environment:
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+      - WATCHTOWER_NOTIFICATION_URL=${NOTIFICATION_URL}
+      - WATCHTOWER_NOTIFICATIONS_HOSTNAME=${HN}
+      - WATCHTOWER_NOTIFICATION_TITLE_TAG=Portainer
+      - WATCHTOWER_SCOPE=portainer
+      - WATCHTOWER_MONITOR_ONLY=true
+      - TZ=${TIMEZONE}
+    # 05:30 so notifications land after the 04:00 dockge-scope run.
+    command: --schedule "0 30 5 * * *"
+    networks:
+      - socket-proxy
+      - default
+    labels:
+      - com.centurylinklabs.watchtower.scope=portainer
+networks:
+  socket-proxy:
+    driver: bridge
+    internal: true
 EOF
 
 # Portainer Compose File with Agent.
@@ -516,6 +649,15 @@ EOF
 # the local portainer-ce would reach docker.sock directly either way.
 # deploy.restart_policy is swarm-only — docker compose up ignores it — so
 # the restart behaviour is set at the service level with `restart:`.
+#
+# --admin-password-file reads a PLAINTEXT password file at FIRST start and
+# bcrypt-hashes it into the database. Once an admin exists the flag is
+# ignored, so this closes the five-minute race where anyone on the network
+# could reach :9443 and claim the admin account before you.
+#
+# scope=portainer labels pair with watchtower-portainer (monitor-only) in
+# dockge-compose.yml: updates are detected and sent to the notification
+# channel but never applied — Portainer stays on a pinned tag you bump.
 cat <<EOF >"$TEMP_DIR/portainer-compose.yml"
 name: portainer
 services:
@@ -535,16 +677,20 @@ services:
         limits:
           cpus: "0.5"
           memory: 1024M
+    labels:
+      - com.centurylinklabs.watchtower.scope=portainer
   portainer:
     container_name: portainer
     image: portainer/portainer-ce:${PORTAINER_CE_TAG}
     restart: unless-stopped
+    command: --admin-password-file=/run/secrets/portainer_admin_password
     ports:
       - 8000:8000
       - 9443:9443
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - portainer_data:/data
+      - /opt/portainer_secrets/portainer_admin_password:/run/secrets/portainer_admin_password:ro
     environment:
       - TZ=${TIMEZONE}
     deploy:
@@ -552,6 +698,8 @@ services:
         limits:
           cpus: "0.5"
           memory: 1024M
+    labels:
+      - com.centurylinklabs.watchtower.scope=portainer
 volumes:
   portainer_data:
     name: portainer_data
@@ -593,6 +741,11 @@ msg_info "Customizing Debian 13 Qcow2 Disk Image"
 (
   umask 077
   printf '%s\n' "$ROOT_PASSWORD" > "$TEMP_DIR/rootpw"
+  # Portainer admin password file: plaintext, no trailing newline (Portainer
+  # reads the entire file as the password). 0600 inside 0700 $TEMP_DIR; the
+  # final file inside the VM is uploaded with 0600 and lives under
+  # /opt/portainer_secrets, outside Dockge's /opt/stacks view.
+  printf '%s' "$PORTAINER_ADMIN_PASSWORD" > "$TEMP_DIR/portainer_admin_password"
 )
 
 # Build the virt-customize invocation as an argv array so each payload is
@@ -603,20 +756,33 @@ cmd=(
   --root-password "file:$TEMP_DIR/rootpw"
   --install qemu-guest-agent,apt-transport-https,ca-certificates,curl,gnupg,lsb-release,openssh-server
   --hostname "$HN"
-  --run-command 'mkdir -p /opt/stacks/dockge /opt/stacks/portainer'
+  --run-command 'mkdir -p /opt/stacks/dockge /opt/stacks/portainer /opt/portainer_secrets'
+  --run-command 'chmod 0700 /opt/portainer_secrets'
   # Create a non-root user so paired stacks (e.g. qbittorrent-vpn-docker)
   # can run with PUID=1000/PGID=1000 instead of as root.
   --run-command 'id deploy >/dev/null 2>&1 || useradd -u 1000 -m -s /bin/bash deploy'
   --run-command 'getent group docker >/dev/null || groupadd docker; usermod -aG docker deploy || true'
   --upload "$TEMP_DIR/dockge-compose.yml:/opt/stacks/dockge/docker-compose.yml"
   --upload "$TEMP_DIR/portainer-compose.yml:/opt/stacks/portainer/docker-compose.yml"
+  --upload "$TEMP_DIR/portainer_admin_password:/opt/portainer_secrets/portainer_admin_password"
+  --chmod 0600:/opt/portainer_secrets/portainer_admin_password
   --upload "$TEMP_DIR/initial-startup.sh:/usr/local/bin/initial-startup.sh"
   --upload "$TEMP_DIR/initial-startup.service:/etc/systemd/system/initial-startup.service"
   --chmod 0755:/usr/local/bin/initial-startup.sh
 )
 
+if [ -n "$AUTHORIZED_KEY" ]; then
+  # --ssh-inject appends to ~/.ssh/authorized_keys and handles perms/dir
+  # creation for us. The 'string:' form passes the key verbatim; the key
+  # was format-validated at prompt time so no shell meta risk here.
+  cmd+=( --ssh-inject "deploy:string:${AUTHORIZED_KEY}" )
+fi
+
 if [ "$ENABLE_ROOT_SSH" == "yes" ]; then
   cmd+=( --run-command 'sed -i "s/^#*PermitRootLogin.*/PermitRootLogin yes/g" /etc/ssh/sshd_config' )
+  if [ -n "$AUTHORIZED_KEY" ]; then
+    cmd+=( --ssh-inject "root:string:${AUTHORIZED_KEY}" )
+  fi
 fi
 if [ "$ENABLE_IPV6" == "no" ]; then
   cmd+=( --run-command 'printf "net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1\n" > /etc/sysctl.d/99-disable-ipv6.conf' )
@@ -632,7 +798,7 @@ cmd+=(
 )
 
 "${cmd[@]}" >/dev/null
-rm -f "$TEMP_DIR/rootpw"
+rm -f "$TEMP_DIR/rootpw" "$TEMP_DIR/portainer_admin_password"
 
 msg_ok "Customized image with Docker, Dockge, and Portainer successfully"
 
