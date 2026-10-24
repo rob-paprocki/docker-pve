@@ -2,11 +2,16 @@
 
 Every pinned version in this repo, where it comes from, and what to watch for.
 
-Renovate ([`renovate.json`](renovate.json)) opens PRs for bumps on a Monday morning cadence. Major-version bumps land on their own PR with the `breaking-candidate` label, which triggers [`.github/workflows/claude-breaking-review.yml`](.github/workflows/claude-breaking-review.yml); that workflow has Claude read the upstream changelog, decide whether the bump is a real break for this repo, and comment on the PR with a verdict. This file is the human companion: why each pin sits where it does, what the breaking signals look like, and how to bump by hand if Renovate can't.
+Two moving parts handle the automation:
 
-## Container images
+- [`.github/dependabot.yml`](.github/dependabot.yml) auto-bumps the one thing Dependabot can parse here: GitHub Actions versions in `.github/workflows/*.yml`. Non-major bumps are grouped on one Monday PR.
+- [`.github/workflows/label-major-bumps.yml`](.github/workflows/label-major-bumps.yml) adds the `breaking-candidate` label to any Dependabot PR crossing a major-version boundary. That label fires [`.github/workflows/claude-breaking-review.yml`](.github/workflows/claude-breaking-review.yml), which has Claude read the upstream changelog, grep this repo for the specific symbols flagged, and comment with a `REAL / NOT / UNCLEAR` verdict.
 
-The following tags live inside `docker-stack-vm.sh` as `${VAR:-default}` bash defaults. Renovate's regex managers in `renovate.json` match the exact `VAR="${VAR:-...}"` form, so the structure of those lines has to be preserved for auto-bumps to work.
+Dependabot does not read bash scripts, so the five Docker image tags encoded as `${VAR:-default}` inside `docker-stack-vm.sh` are **hand-bumped**. The monthly [`.github/workflows/external-upstream-watch.yml`](.github/workflows/external-upstream-watch.yml) files GitHub issues when the three externally-blocked items are ready (CVE-2026-78122 fix lands, Debian starts signing cloud images, `community-scripts/api.func` drifts). For the other image tags, this file is the companion recipe: each section below has the source link, the breaking signals, and the hand-bump steps.
+
+## Container images (hand-bumped)
+
+The following tags live inside `docker-stack-vm.sh` as `${VAR:-default}` bash defaults. Dependabot cannot parse these; a bump is a one-line edit per variable followed by a shellcheck pass.
 
 ### `louislam/dockge`
 
@@ -25,7 +30,7 @@ The following tags live inside `docker-stack-vm.sh` as `${VAR:-default}` bash de
 ### `ghcr.io/nicholas-fedor/watchtower`
 
 - **Pinned at:** `WATCHTOWER_TAG` default (currently `v1.23.2`)
-- **Source:** [`nicholas-fedor/watchtower`](https://github.com/nicholas-fedor/watchtower) — the active community fork of the archived `containrrr/watchtower`.
+- **Source:** [`nicholas-fedor/watchtower`](https://github.com/nicholas-fedor/watchtower), the active community fork of the archived `containrrr/watchtower`.
 - **Breaking signals:** env var renames or label-prefix changes. The current prefix is `com.centurylinklabs.watchtower.*` and matches the containrrr era; a prefix rename would break every scope label in this repo at once. Monitor-only mode is `WATCHTOWER_MONITOR_ONLY=true`.
 - **Bump by hand:** change `WATCHTOWER_TAG`. Both Watchtower instances share the variable.
 
@@ -58,11 +63,12 @@ The following tags live inside `docker-stack-vm.sh` as `${VAR:-default}` bash de
 - **Pinned at:** inside `.github/workflows/*.yml` (`actions/checkout@v4`, `ludeeus/action-shellcheck@2.0.0`, `anthropics/claude-code-action@v1`)
 - **Source:** each action's own GitHub repo.
 - **Breaking signals:** `v1` → `v2` major on `claude-code-action` is the one most likely to actually require changes (prompt / input renames).
-- **Bump by hand:** change the `@` tag. Renovate also opens PRs for these.
+- **Auto-tracked:** yes, by Dependabot (`github-actions` ecosystem). Non-major bumps group on a Monday PR; majors land solo and get labelled `breaking-candidate` by `label-major-bumps.yml`.
 
 ## How to add a new pinned dep
 
 1. Add the `VAR="${VAR:-default}"` line to `docker-stack-vm.sh`.
-2. Add a `customManagers` regex block in `renovate.json` that matches the exact variable name.
-3. Add a section here with a source link, breaking signals, and a bump-by-hand paragraph.
-4. If the dep is externally-blocked on an upstream issue (like Tecnativa PR #183), add a check step to `.github/workflows/external-upstream-watch.yml`.
+2. Add a section here with a source link, breaking signals, and a bump-by-hand paragraph.
+3. If the dep is externally-blocked on an upstream issue (like Tecnativa PR #183), add a check step to `.github/workflows/external-upstream-watch.yml` so a bump candidate shows up as a GitHub issue when the upstream is ready.
+
+If a dep ever gains a form Dependabot can parse (a Dockerfile, a package manifest, a compose file), add an `updates:` block for that ecosystem to `.github/dependabot.yml` instead of hand-bumping.
