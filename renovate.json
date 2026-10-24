@@ -1,0 +1,83 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":prHourlyLimit4"
+  ],
+  "schedule": ["before 6am on monday"],
+  "timezone": "America/New_York",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 10,
+  "rangeStrategy": "pin",
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["major"],
+      "addLabels": ["breaking-candidate"],
+      "commitMessagePrefix": "deps(major):",
+      "prPriority": 10
+    },
+    {
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "non-major updates",
+      "groupSlug": "all-minor-patch",
+      "commitMessagePrefix": "deps:"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "addLabels": ["github-actions"]
+    },
+    {
+      "matchDepNames": ["ghcr.io/tecnativa/docker-socket-proxy"],
+      "description": "Keep an eye on this one even for patches — CVE-2026-78122 fix is in PR #183, patch release will carry it.",
+      "addLabels": ["security"]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["^docker-stack-vm\\.sh$"],
+      "matchStrings": [
+        "DOCKGE_TAG=\"\\$\\{DOCKGE_TAG:-(?<currentValue>[^}]+)\\}\""
+      ],
+      "depNameTemplate": "louislam/dockge",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": ["^docker-stack-vm\\.sh$"],
+      "matchStrings": [
+        "PORTAINER_CE_TAG=\"\\$\\{PORTAINER_CE_TAG:-(?<currentValue>[^}]+)\\}\""
+      ],
+      "depNameTemplate": "portainer/portainer-ce",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": ["^docker-stack-vm\\.sh$"],
+      "matchStrings": [
+        "PORTAINER_AGENT_TAG=\"\\$\\{PORTAINER_AGENT_TAG:-(?<currentValue>[^}]+)\\}\""
+      ],
+      "depNameTemplate": "portainer/agent",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": ["^docker-stack-vm\\.sh$"],
+      "matchStrings": [
+        "WATCHTOWER_TAG=\"\\$\\{WATCHTOWER_TAG:-(?<currentValue>[^}]+)\\}\""
+      ],
+      "depNameTemplate": "ghcr.io/nicholas-fedor/watchtower",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": ["^docker-stack-vm\\.sh$"],
+      "matchStrings": [
+        "SOCKET_PROXY_TAG=\"\\$\\{SOCKET_PROXY_TAG:-(?<currentValue>[^}]+)\\}\""
+      ],
+      "depNameTemplate": "ghcr.io/tecnativa/docker-socket-proxy",
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

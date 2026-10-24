@@ -1,0 +1,93 @@
+name: External upstream watch
+
+# Monthly cron for the two upstream situations Renovate can't track:
+#   - Tecnativa/docker-socket-proxy PR #183 (CVE-2026-78122 fix) merging
+#   - Debian cloud team starting to sign per-distribution images
+#   - community-scripts/ProxmoxVE main having new commits touching misc/api.func
+#     since the pinned SHA
+#
+# Each check opens a GitHub issue when the state changes, and dedupes by
+# searching for an existing open issue with the same title before creating.
+
+on:
+  schedule:
+    - cron: '0 11 1 * *'   # 11:00 UTC on the 1st of every month
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tecnativa/docker-socket-proxy#183 (CVE-2026-78122 fix)
+        run: |
+          set -euo pipefail
+          title="docker-socket-proxy CVE-2026-78122 fix merged upstream"
+          pr=$(gh api repos/Tecnativa/docker-socket-proxy/pulls/183 \
+            --jq '{state:.state, merged:.merged, merged_at:.merged_at}')
+          echo "PR state: $pr"
+          merged=$(echo "$pr" | jq -r '.merged')
+          if [ "$merged" = "true" ]; then
+            existing=$(gh issue list -R "${{ github.repository }}" --state open \
+              --search "$title in:title" --json number --jq 'length')
+            if [ "$existing" = "0" ]; then
+              gh issue create -R "${{ github.repository }}" \
+                --title "$title" \
+                --label "security,breaking-candidate" \
+                --body "[Tecnativa/docker-socket-proxy#183](https://github.com/Tecnativa/docker-socket-proxy/pull/183) is merged upstream. Bump \`SOCKET_PROXY_TAG\` in \`docker-stack-vm.sh\` to the first release carrying the fix, remove the CVE residual note from \`SECURITY.md\` and \`README.md\`, and re-render the dockge-compose heredoc locally to confirm no env semantics changed."
+            fi
+          fi
+
+      - name: Debian cloud image SHA512SUMS.sign
+        run: |
+          set -euo pipefail
+          title="Debian cloud SHA512SUMS.sign appeared for trixie/latest"
+          url="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS.sign"
+          size=$(curl -fsIL "$url" | awk 'BEGIN{IGNORECASE=1} /^content-length:/{print $2}' | tr -d '\r' | tail -1 || true)
+          echo "Signature size: ${size:-missing}"
+          if [ -n "${size:-}" ] && [ "$size" -gt 0 ]; then
+            existing=$(gh issue list -R "${{ github.repository }}" --state open \
+              --search "$title in:title" --json number --jq 'length')
+            if [ "$existing" = "0" ]; then
+              gh issue create -R "${{ github.repository }}" \
+                --title "$title" \
+                --label "security" \
+                --body "Debian's cloud team is now publishing \`$url\`. Add a \`gpg --verify\` step before \`sha512sum -c\` in \`docker-stack-vm.sh\`, import the signing key from a well-known source, and remove the \"authenticity leg via HTTPS only\" note from \`SECURITY.md\` and \`UPSTREAMS.md\`."
+            fi
+          fi
+
+      - name: community-scripts/ProxmoxVE misc/api.func drift
+        run: |
+          set -euo pipefail
+          title="New commits touching community-scripts api.func since pin"
+          pinned=$(grep -oE 'API_FUNC_REF="\$\{API_FUNC_REF:-[a-f0-9]{40}\}"' docker-stack-vm.sh \
+            | grep -oE '[a-f0-9]{40}' | head -1)
+          echo "Pinned SHA: $pinned"
+          if [ -z "$pinned" ]; then
+            echo "Could not read pinned SHA from docker-stack-vm.sh — skipping"
+            exit 0
+          fi
+          commits=$(gh api "repos/community-scripts/ProxmoxVE/commits?path=misc/api.func&sha=main&since=$(date -u -d '35 days ago' +%Y-%m-%dT00:00:00Z)" \
+            --jq '[.[] | .sha] | .[]' | tr '\n' ' ' || true)
+          echo "Recent api.func commits: $commits"
+          # Only alert when there is a commit on main that is NOT the pinned one.
+          drift="no"
+          for c in $commits; do
+            if [ "$c" != "$pinned" ]; then drift="yes"; fi
+          done
+          if [ "$drift" = "yes" ]; then
+            existing=$(gh issue list -R "${{ github.repository }}" --state open \
+              --search "$title in:title" --json number --jq 'length')
+            if [ "$existing" = "0" ]; then
+              gh issue create -R "${{ github.repository }}" \
+                --title "$title" \
+                --body "\`misc/api.func\` on \`community-scripts/ProxmoxVE@main\` has new commits since the pinned SHA (\`$pinned\`). Fetch the raw file at a candidate commit, grep for \`post_to_api_vm\` and \`post_update_to_api\`, then bump \`API_FUNC_REF\` in \`docker-stack-vm.sh\`. Recent commits touching the file: $commits"
+            fi
+          fi
