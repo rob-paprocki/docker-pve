@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # The five Docker image tags live inside docker-stack-vm.sh as bash
+  # variable defaults (DOCKGE_TAG, PORTAINER_CE_TAG, PORTAINER_AGENT_TAG,
+  # WATCHTOWER_TAG, SOCKET_PROXY_TAG). Dependabot cannot parse version
+  # strings inside a shell script, so those bump by hand. See UPSTREAMS.md
+  # for the hand-bump recipe per dep, and .github/workflows/external-
+  # upstream-watch.yml for the monthly cron that opens issues when
+  # externally-blocked items (CVE-2026-78122, Debian signing, api.func
+  # drift) are ready to pick up.
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "deps"
+    groups:
+      actions-non-major:
+        update-types: ["minor", "patch"]
