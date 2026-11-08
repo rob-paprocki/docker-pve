@@ -1,8 +1,8 @@
 # docker-pve
 
-A Proxmox VE helper that provisions a Debian 13 cloud-image VM pre-loaded with Docker, Dockge, Portainer (CE plus the remote agent on 9001), and Watchtower. An interactive whiptail wizard asks for the VM's basics; everything else is baked into the image before first boot.
+A Proxmox VE helper that provisions a Debian 13 cloud-image VM pre-loaded with Docker and [Dockhand](https://dockhand.pro), which manages the containers and keeps their images updated. [Dockge](https://github.com/louislam/dockge) is available as an optional secondary compose UI. An interactive whiptail wizard asks for the VM's basics; everything else is baked into the image before first boot, and Dockhand is configured and locked down on first boot before it is reachable from the network.
 
-Pairs with [qbittorrent-vpn-docker](https://github.com/rob-paprocki/qbittorrent-vpn-docker), a Gluetun-fronted qBittorrent stack designed to live under `/opt/stacks/` on the VM this script creates and be adopted directly by Dockge.
+Pairs with [qbittorrent-vpn-docker](https://github.com/rob-paprocki/qbittorrent-vpn-docker), a Gluetun-fronted qBittorrent stack designed to live under `/opt/stacks/` on the VM this script creates.
 
 ## Prerequisites
 
@@ -24,34 +24,41 @@ Opt out of community-scripts anonymous diagnostics by prefixing `DIAGNOSTICS=no`
 
 ## What you get
 
-| Service               | Image                                              | Port                | Watchtower scope          |
-|-----------------------|----------------------------------------------------|---------------------|---------------------------|
-| Dockge                | `louislam/dockge:1.5.0`                            | 5001 (HTTP)         | `dockge`                  |
-| Watchtower (updater)  | `ghcr.io/nicholas-fedor/watchtower:v1.23.2`        | (none)              | `dockge`                  |
-| Watchtower (monitor)  | `ghcr.io/nicholas-fedor/watchtower:v1.23.2`        | (none)              | `portainer` (notify-only) |
-| docker-socket-proxy   | `ghcr.io/tecnativa/docker-socket-proxy:0.5.0`      | (none)              | (unscoped, pin manually)  |
-| Portainer             | `portainer/portainer-ce:2.45.3`                    | 8000 / 9443 (HTTPS) | `portainer`               |
-| Portainer agent       | `portainer/agent:2.45.3`                           | 9001                | `portainer`               |
+| Service             | Image                       | Port        | Role                                         |
+|---------------------|-----------------------------|-------------|----------------------------------------------|
+| Dockhand            | `fnsys/dockhand:v1.0.57`    | 3000 (HTTP) | Docker manager and image updater             |
+| Dockge (optional)   | `louislam/dockge:1.5.0`     | 5001 (HTTP) | Secondary compose UI; Advanced settings only |
 
-Two Watchtower instances run on separate schedules. The `scope=dockge` instance auto-updates Dockge and itself nightly at 04:00. Stacks a user later deploys through Dockge are not touched unless they add `com.centurylinklabs.watchtower.scope=dockge` to their own services. The `scope=portainer` instance runs at 05:30 in monitor-only mode: it reports upgrades for Portainer and its agent through the configured notification channel and never applies them, so Portainer version bumps stay a deliberate action. The monitor-only instance talks to the Docker API through `docker-socket-proxy` with `POST=0`, so even a full compromise there cannot create, stop, or remove containers.
+Dockhand lives in `/opt/dockhand` and manages the stacks in `/opt/stacks`. On first boot it is set up with:
+
+* the VM's local Docker socket as its environment;
+* `/opt/stacks` as the folder it scans for stacks, and the stacks folder for stacks you create in Dockhand, so Dockhand, Dockge and the CLI all work on the same `compose.yaml` files in place;
+* a nightly update at 04:00 (host timezone): every container is checked for a newer image and updated, unless the new image has more known vulnerabilities than the one it replaces, in which case the update is blocked and reported. Containers that share another container's network (the paired stack's qBittorrent shares Gluetun's) are reconnected when their parent is updated;
+* an optional notification channel for update results (succeeded, failed, blocked);
+* an `admin` account, with authentication on.
+
+Dockhand does not update itself on that schedule. It shows a new release in its sidebar and updates itself when you click it; afterwards, set the new tag in `/opt/dockhand/compose.yaml` so a later `docker compose up -d` there doesn't roll it back.
+
+There is no Watchtower and no Portainer. Dockhand covers both: image updates, plus container, image, volume and network management.
 
 The VM also gets:
 
 * `qemu-guest-agent` installed and `--agent 1` set, so the PVE UI can read the IP and gracefully stop the VM.
 * A `deploy` non-root user (uid 1000, in the `docker` group) so stacks that run as `PUID=1000`/`PGID=1000` (such as [qbittorrent-vpn-docker](https://github.com/rob-paprocki/qbittorrent-vpn-docker)) can own `/opt/stacks/*/<data>` directly.
-* `/opt/stacks/` pre-populated with `dockge/` and `portainer/`, plus a one-shot `initial-startup.service` that runs `docker compose up -d` for both before deleting itself.
+* A first-boot `initial-startup.service` that starts Dockhand (and Dockge, if chosen), configures Dockhand, and disables itself once it succeeds.
 * `git` and `python3-venv`, so the paired stack can be cloned and its host-side setup editor (`scripts/setup.sh`) can build its Python venv. The Debian 13 `nocloud` image ships `python3` but neither of these.
 
 ## Options the wizard asks about
 
-**Default** mode prompts for a root password; everything else uses defaults (25 GB disk, 2 cores, 4 GiB RAM, DHCP, i440fx, EFI, VirtIO SCSI, SSH off for root). The Portainer admin password reuses the root password in default mode to avoid a second prompt. **Advanced** mode also asks for:
+**Default** mode prompts for a root password (8+ characters); everything else uses defaults (25 GB disk, 2 cores, 4 GiB RAM, DHCP, i440fx, EFI, VirtIO SCSI, SSH off for root, no Dockge, no notifications). The Dockhand `admin` password reuses the root password in default mode to avoid a second prompt. **Advanced** mode also asks for:
 
 * VMID, machine type (i440fx or q35, both EFI with a 4 MiB vars store), disk size, hostname
 * CPU cores, RAM, bridge, MAC address
 * IPv6 on/off (sysctl inside the guest)
-* Watchtower notification URL (any shoutrrr URL, e.g. `ntfy://`, `discord://`, `slack://`, `telegram://`, `gotify://`)
+* Notification URL for Dockhand's update results, in Dockhand's Apprise-style format, e.g. `ntfys://ntfy.example.com/updates`, `discord://webhook_id/webhook_token`, `tgram://bot_token/chat_id`, `gotify://host/token`, `pover://user_key@api_token`. These differ from the Shoutrrr URLs earlier versions passed to Watchtower.
 * Root password
-* Portainer admin password (minimum 12 characters; pre-seeded via `--admin-password-file` so there is no first-boot race window)
+* Dockhand `admin` password (minimum 8 characters, Dockhand's own limit)
+* Whether to also install Dockge (defaults to **no**)
 * Optional SSH public key for the `deploy` user (and root, if root SSH is enabled)
 * Allow root SSH login (defaults to **no**)
 * Start VM when done
@@ -66,18 +73,28 @@ Three remote inputs are involved. Read each before running this on infrastructur
 2. **`community-scripts/ProxmoxVE/misc/api.func`**, sourced at the top of this script. It provides `post_to_api_vm`, `post_update_to_api`, etc., which POST anonymous counters (OS, action, outcome) to a community telemetry endpoint. Pinned to a specific commit so a change on `main` cannot land silently; the script aborts if the fetch fails. Set `DIAGNOSTICS=no` to disable all uploads at runtime.
 3. **Debian 13 `nocloud` qcow2**, verified against the published `SHA512SUMS`. Integrity only, not authenticity: Debian's cloud team does not sign per-distribution images consistently, so GPG verification is deferred. HTTPS to `cloud.debian.org` covers the authenticity leg.
 
+### First-boot lock-down
+
+Dockhand starts with authentication off and lets whoever reaches it first create the admin account. `initial-startup.service` therefore publishes Dockhand on `127.0.0.1` only, configures it and creates the `admin` account through its API, enables authentication, and republishes it on port 3000 only after an anonymous API request is refused. The admin password and notification URL wait in `/opt/dockhand_secrets` (0700, files 0600) and are deleted once that succeeds.
+
+If any step fails, Dockhand stays on `127.0.0.1`, the secrets stay in place, and the service runs again on the next boot. Check `journalctl -u initial-startup` on the VM.
+
 ### Container-level residuals
 
-The provisioned VM gives Dockge, the updating Watchtower, Portainer, and the Portainer agent unrestricted access to `/var/run/docker.sock` on the guest, so a compromise of any one is root on the guest. The monitor-only Watchtower is proxied through `docker-socket-proxy` with `POST=0`, which cuts off container create/start/stop even on compromise. The proxy itself carries [CVE-2026-78122](https://app.opencve.io/cve/CVE-2026-78122): GET on `/containers/{id}/archive|export|logs|top` leaks when `CONTAINERS=1`. Fix tracked at [Tecnativa/docker-socket-proxy#183](https://github.com/Tecnativa/docker-socket-proxy/pull/183). The proxy sits on an internal (egressless) bridge, so only `watchtower-portainer` can reach it.
+Dockhand, and Dockge when installed, have unrestricted access to `/var/run/docker.sock` on the guest, so a compromise of either is root on the guest. Dockhand also runs as root inside its container (its default).
 
-Firewall ports **5001 / 8000 / 9443 / 9001** off the WAN side; put a reverse proxy with auth in front of them if the VM is reachable from untrusted networks.
+The nightly update pulls new images automatically. Blocking updates that add known vulnerabilities does not catch a malicious image with no known CVEs.
+
+Dockhand is source-available under the Business Source License 1.1, not open source. Each version converts to Apache 2.0 four years after release, and its pricing page sells a separate commercial-use license.
+
+Dockhand and Dockge serve plain HTTP, so the Dockhand password crosses the network in the clear. Firewall ports **3000** (and **5001** with Dockge) off the WAN side, and put a TLS reverse proxy in front of them if the VM is reachable from untrusted networks.
 
 ## Next steps
 
 Once the VM is up:
 
-1. Visit `http://<vm-ip>:5001` and create the Dockge admin.
-2. Visit `https://<vm-ip>:9443` and log in to Portainer as `admin` with the password you set in the wizard. The admin account is pre-seeded, so there is no first-boot window to race. Portainer then opens its Environment Wizard; choose **Get Started** to connect the local Docker environment.
+1. Visit `http://<vm-ip>:3000` and log in as `admin` with the password you set in the wizard (the root password in default mode). Everything listed under **What you get** is already configured. If the page doesn't load a few minutes after first boot, run `journalctl -u initial-startup` on the VM.
+2. If you installed Dockge, visit `http://<vm-ip>:5001` and create the Dockge admin. Use it for reading logs and editing files: its Start, Update and Deploy buttons run Dockge's bundled Docker Compose (v2.34.0), whose config hashes differ from the VM's, so they recreate every container in the stack.
 3. Deploy a stack. For the paired VPN'd qBittorrent setup:
    ```bash
    cd /opt/stacks
@@ -85,14 +102,13 @@ Once the VM is up:
    cd torrent-stack
    # follow that repo's README: ./scripts/setup.sh serves the env-editor on :9191
    ```
-   Clone into `torrent-stack`, not the default `qbittorrent-vpn-docker` folder. Dockge names stacks after their folder, while Docker names the project from `name: torrent-stack` in the compose file. With mismatched names Dockge shows two entries: an inactive one you can edit, and an active one marked "not managed by Dockge". The paired README also explains why its env-editor, not Dockge's Start/Update buttons, should handle restarts.
+   Then pick it up in Dockhand under **Stacks → Adopt**. Dockhand names the stack `torrent-stack` from its compose file. Clone into a `torrent-stack` folder anyway: Dockge names stacks after their folder and shows the stack twice when the two names differ.
 
 ## Round-3 backlog
 
 Items the audit flagged but deferred past Round 2:
 
 * GPG verification of the Debian cloud image (blocked on the Debian Cloud Team signing per-distribution images consistently)
-* `docker-socket-proxy` upstream fix for [CVE-2026-78122](https://app.opencve.io/cve/CVE-2026-78122) (Tecnativa PR #183)
 * genericcloud + cloud-init to restore a working static-IP prompt
 * arm64 support
 * SECURITY.md, CODEOWNERS, PR templates

@@ -14,11 +14,15 @@ Only the current `main` branch is supported. Each change rolls forward; there ar
 
 These are documented, not fixed yet.
 
-[CVE-2026-78122](https://app.opencve.io/cve/CVE-2026-78122) on `ghcr.io/tecnativa/docker-socket-proxy:0.5.0`. A client with `CONTAINERS=1` can GET `/containers/{id}/archive|export|logs|top`. The proxy here sits on an internal (egressless) Docker network reachable only by the monitor-only Watchtower, so the exposure is bounded by that one container's blast radius. Upstream fix tracked at [Tecnativa/docker-socket-proxy#183](https://github.com/Tecnativa/docker-socket-proxy/pull/183); the monthly `external-upstream-watch` workflow in this repo opens an issue when PR #183 merges.
-
 Debian cloud image authenticity. The provisioning script verifies the Debian 13 cloud image against the published `SHA512SUMS` but does not verify a GPG signature, because Debian's cloud team does not sign per-distribution images consistently. HTTPS to `cloud.debian.org` is the only authenticity leg. The same monthly workflow watches for a signature file to appear.
 
-Docker socket exposure. Dockge, the updating Watchtower, Portainer, and the Portainer agent each have unrestricted access to `/var/run/docker.sock` on the guest. A compromise of any of them is root on the guest. The monitor-only Watchtower is proxied; the others are not.
+Docker socket exposure. Dockhand, and Dockge when installed, have unrestricted access to `/var/run/docker.sock` on the guest. A compromise of either is root on the guest.
+
+Automatic image updates. Dockhand pulls and applies new images nightly. It blocks an update whose image has more known vulnerabilities than the running one, which does not catch a malicious image with no known CVEs.
+
+Plain HTTP. Dockhand (port 3000) and Dockge (port 5001) serve HTTP only, so logins cross the network in the clear unless a TLS reverse proxy fronts them.
+
+First-boot window. Dockhand lets whoever reaches it first create the admin account while authentication is off. The first-boot script keeps Dockhand on `127.0.0.1` until the admin exists and an anonymous API request is refused, and leaves it there if any step fails.
 
 ## Scope
 
