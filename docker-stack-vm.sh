@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # docker-stack-vm.sh — provision a Debian 13 VM on Proxmox VE pre-loaded with
-# Docker + Dockge + Portainer + Watchtower.
+# Docker + Dockhand (Dockge optional).
 #
 # Adapted from the community-scripts/ProxmoxVE helper-script pattern
 # (https://github.com/community-scripts/ProxmoxVE) — the whiptail UI,
@@ -57,21 +57,12 @@ DISK_SIZE="25G"
 SCRIPT_VERSION="2025.10"
 
 # Container image tags, bumpable in one place.
+# Dockhand is the Docker manager and also applies image updates (a nightly
+# environment-wide schedule seeded at first boot), so no Watchtower runs.
+DOCKHAND_IMAGE="${DOCKHAND_IMAGE:-fnsys/dockhand}"
+DOCKHAND_TAG="${DOCKHAND_TAG:-v1.0.57}"
+# Dockge is optional (Advanced settings, off by default).
 DOCKGE_TAG="${DOCKGE_TAG:-1.5.0}"
-PORTAINER_CE_TAG="${PORTAINER_CE_TAG:-2.45.3}"
-PORTAINER_AGENT_TAG="${PORTAINER_AGENT_TAG:-2.45.3}"
-# containrrr/watchtower was archived December 2025; nicholas-fedor is the
-# active community fork, drop-in compatible on env/labels.
-WATCHTOWER_IMAGE="${WATCHTOWER_IMAGE:-ghcr.io/nicholas-fedor/watchtower}"
-WATCHTOWER_TAG="${WATCHTOWER_TAG:-v1.23.2}"
-# docker-socket-proxy fronts the monitor-only Portainer-scope watchtower
-# below so that a compromise there cannot reach the raw Docker socket.
-# POST is left off; CONTAINERS/IMAGES are on for read. Residual risk:
-# CVE-2026-78122 (GET /containers/{id}/archive|export|logs|top leak when
-# CONTAINERS=1) — still strictly better than a raw socket; fix tracked at
-# Tecnativa/docker-socket-proxy PR #183.
-SOCKET_PROXY_IMAGE="${SOCKET_PROXY_IMAGE:-ghcr.io/tecnativa/docker-socket-proxy}"
-SOCKET_PROXY_TAG="${SOCKET_PROXY_TAG:-0.5.0}"
 
 YW=$(echo "\033[33m")
 BL=$(echo "\033[36m")
@@ -152,7 +143,7 @@ function cleanup() {
 
 TEMP_DIR=$(mktemp -d)
 pushd $TEMP_DIR >/dev/null
-if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Docker VM with Dockge & Portainer" --yesno "This will create a New Docker VM with Dockge and Portainer pre-installed. Proceed?" 10 68; then
+if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Docker VM with Dockhand" --yesno "This will create a New Docker VM with Dockhand pre-installed. Proceed?" 10 68; then
   :
 else
   header_info && echo -e "${CROSS}${RD}User exited script${CL}\n" && exit
@@ -247,6 +238,7 @@ function default_settings() {
   BRG="vmbr0"
   START_VM="yes"
   NOTIFICATION_URL=""
+  INSTALL_DOCKGE="no"
   METHOD="default"
   ENABLE_ROOT_SSH="no"
   ENABLE_IPV6="yes"
@@ -259,18 +251,26 @@ function default_settings() {
   echo -e "${RAMSIZE}${BOLD}${DGN}RAM Size: ${BGN}${RAM_SIZE}${CL}"
   echo -e "${BRIDGE}${BOLD}${DGN}Bridge: ${BGN}${BRG}${CL}"
   echo -e "${GATEWAY}${BOLD}${DGN}Start VM when completed: ${BGN}yes${CL}"
+  echo -e "${CONTAINERTYPE}${BOLD}${DGN}Install Dockge: ${BGN}no${CL}"
   if ROOT_PASSWORD=$(whiptail --backtitle "Proxmox VE Helper Scripts" --passwordbox "Set a root password for the VM" 10 60 --title "ROOT PASSWORD" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
     if [ -z "$ROOT_PASSWORD" ]; then
       whiptail --msgbox "A password is required to continue." 10 60
+      exit-script
+    fi
+    # Default mode reuses this password for the Dockhand admin, and Dockhand
+    # rejects passwords shorter than 8 characters (first boot would then
+    # leave Dockhand locked to 127.0.0.1), so enforce that here.
+    if [ "${#ROOT_PASSWORD}" -lt 8 ]; then
+      whiptail --msgbox "The root password is also used for the Dockhand admin, which needs at least 8 characters." 10 72
       exit-script
     fi
     echo -e "${INFO}${BOLD}${DGN}Root password is set.${CL}"
   else
     exit-script
   fi
-  # Default-mode reuses the root password for the Portainer admin to avoid
+  # Default-mode reuses the root password for the Dockhand admin to avoid
   # a second prompt. Advanced mode asks separately.
-  PORTAINER_ADMIN_PASSWORD="$ROOT_PASSWORD"
+  DOCKHAND_ADMIN_PASSWORD="$ROOT_PASSWORD"
   echo -e "${CREATING}${BOLD}${DGN}Creating a Docker VM using the above default settings${CL}"
 }
 
@@ -356,7 +356,7 @@ function advanced_settings() {
   echo -e "${GATEWAY}${BOLD}${DGN}IPv6 Enabled: ${BGN}$ENABLE_IPV6${CL}"
   echo -e "${GATEWAY}${BOLD}${DGN}Network: ${BGN}DHCP${CL} (set a reservation on your DHCP server, or edit the VM after boot)"
 
-  if NOTIFICATION_URL=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter Watchtower Notification URL (optional)\nShoutrrr URL, any scheme: ntfy://, gotify://, discord://, telegram://, smtp://.\nExample: ntfy://ntfy.example.com/updates" 11 78 --title "NOTIFICATION URL" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+  if NOTIFICATION_URL=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter a notification URL for Dockhand's update results (optional)\nApprise-style: ntfys://, discord://, tgram://, gotify://, slack://, pover://.\nExample: ntfys://ntfy.example.com/updates" 11 78 --title "NOTIFICATION URL" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
      if [ -z "$NOTIFICATION_URL" ]; then
         echo -e "${INFO}${BOLD}${DGN}No notification URL provided.${CL}"
      else
@@ -376,24 +376,34 @@ function advanced_settings() {
     exit-script
   fi
 
-  # Portainer admin pre-seed closes the first-boot race where anyone on the
-  # network can reach http://${HN}:9443 before you do and claim the admin
-  # account. --admin-password-file reads this file as plaintext at first
-  # start only; it is ignored once an admin exists.
-  if PORTAINER_ADMIN_PASSWORD=$(whiptail --backtitle "Proxmox VE Helper Scripts" --passwordbox "Set a Portainer admin password (pre-seeded; closes the 5-min first-boot race)" 10 72 --title "PORTAINER ADMIN PASSWORD" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
-    if [ -z "$PORTAINER_ADMIN_PASSWORD" ]; then
-      whiptail --msgbox "A Portainer admin password is required." 10 60
+  # Dockhand starts with authentication off and lets whoever reaches it
+  # first create the admin. The first-boot script creates this admin and
+  # enables authentication while Dockhand is still published on 127.0.0.1,
+  # so there is no window for anyone on the network to claim it.
+  if DOCKHAND_ADMIN_PASSWORD=$(whiptail --backtitle "Proxmox VE Helper Scripts" --passwordbox "Set the Dockhand admin password (user 'admin'; set before Dockhand is reachable)" 10 72 --title "DOCKHAND ADMIN PASSWORD" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+    if [ -z "$DOCKHAND_ADMIN_PASSWORD" ]; then
+      whiptail --msgbox "A Dockhand admin password is required." 10 60
       exit-script
     fi
-    # Portainer rejects admin passwords shorter than 12 characters at first-boot.
-    if [ "${#PORTAINER_ADMIN_PASSWORD}" -lt 12 ]; then
-      whiptail --msgbox "Portainer requires the admin password to be at least 12 characters." 10 60
+    # Dockhand rejects passwords shorter than 8 characters.
+    if [ "${#DOCKHAND_ADMIN_PASSWORD}" -lt 8 ]; then
+      whiptail --msgbox "Dockhand requires the admin password to be at least 8 characters." 10 60
       exit-script
     fi
-    echo -e "${INFO}${BOLD}${DGN}Portainer admin password is set.${CL}"
+    echo -e "${INFO}${BOLD}${DGN}Dockhand admin password is set.${CL}"
   else
     exit-script
   fi
+
+  # Dockge is an optional second compose UI over the same /opt/stacks
+  # folders. Off by default: Dockhand already covers it, and Dockge's
+  # bundled Docker Compose recreates containers the host's Compose created.
+  if (whiptail --backtitle "Proxmox VE Helper Scripts" --title "DOCKGE" --yesno "Also install Dockge as a secondary compose UI (port 5001)?" 10 62 --defaultno); then
+    INSTALL_DOCKGE="yes"
+  else
+    INSTALL_DOCKGE="no"
+  fi
+  echo -e "${CONTAINERTYPE}${BOLD}${DGN}Install Dockge: ${BGN}${INSTALL_DOCKGE}${CL}"
 
   # Optional SSH public key for the 'deploy' user (and root, when root SSH is
   # enabled below). Keeping it empty leaves password-only auth in place.
@@ -426,7 +436,7 @@ function advanced_settings() {
   echo -e "${GATEWAY}${BOLD}${DGN}Start VM when completed: ${BGN}$START_VM${CL}"
 
   if (whiptail --backtitle "Proxmox VE Helper Scripts" --title "SETTINGS" --yesno "Ready to create the VM?" --no-button Do-Over 10 58); then
-    echo -e "${CREATING}${BOLD}${DGN}Creating a Docker VM with Dockge & Portainer using the above advanced settings${CL}"
+    echo -e "${CREATING}${BOLD}${DGN}Creating a Docker VM with Dockhand using the above advanced settings${CL}"
   else
     header_info
     echo -e "${ADVANCED}${BOLD}${RD}Using Advanced Settings${CL}"
@@ -552,20 +562,34 @@ if ! command -v virt-customize &>/dev/null; then
 fi
 
 msg_info "Creating Docker stack configuration files"
-# Dockge Compose File
-#
-# Two Watchtower instances with distinct scopes:
-#   - watchtower (scope=dockge) auto-updates Dockge and itself. Stacks
-#     deployed later through Dockge are left alone unless their services
-#     carry the scope=dockge label. Needs the raw Docker socket because
-#     container updates require POST /containers/create (recreate), which
-#     the socket proxy would also have to allow — so the proxy would not
-#     meaningfully reduce this instance's authority.
-#   - watchtower-portainer (scope=portainer, --monitor-only) ONLY notifies
-#     when Portainer or portainer-agent have an update available. Because
-#     it never writes, it talks to the Docker API through docker-socket-
-#     proxy with POST=0 — so even a full compromise cannot create or
-#     recreate containers.
+# Dockhand compose file. Dockhand lives in /opt/dockhand, outside the
+# /opt/stacks folder it manages, and both are mounted at the same paths
+# inside the container so compose files with relative paths resolve on the
+# host. DOCKHAND_BIND (escaped below, so Compose reads it at run time) lets
+# the first-boot script publish Dockhand on 127.0.0.1 only until its admin
+# account exists and authentication is on.
+cat <<EOF >"$TEMP_DIR/dockhand-compose.yml"
+name: dockhand
+services:
+  dockhand:
+    image: ${DOCKHAND_IMAGE}:${DOCKHAND_TAG}
+    container_name: dockhand
+    restart: unless-stopped
+    ports:
+      - \${DOCKHAND_BIND:-0.0.0.0}:3000:3000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/dockhand/data:/opt/dockhand/data
+      - /opt/stacks:/opt/stacks
+    environment:
+      - DATA_DIR=/opt/dockhand/data
+      - STACKS_DIR=/opt/stacks
+      - TZ=${TIMEZONE}
+EOF
+
+# Optional Dockge compose file (Advanced settings), over the same
+# /opt/stacks folder. Dockhand's nightly update covers it like any other
+# container, so it carries no updater of its own.
 cat <<EOF >"$TEMP_DIR/dockge-compose.yml"
 name: dockge
 services:
@@ -582,144 +606,134 @@ services:
     environment:
       - DOCKGE_STACKS_DIR=/opt/stacks
       - TZ=${TIMEZONE}
-    labels:
-      - com.centurylinklabs.watchtower.scope=dockge
-  watchtower:
-    image: ${WATCHTOWER_IMAGE}:${WATCHTOWER_TAG}
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - WATCHTOWER_NOTIFICATION_URL=${NOTIFICATION_URL}
-      - WATCHTOWER_NOTIFICATIONS_HOSTNAME=${HN}
-      - WATCHTOWER_NOTIFICATION_TITLE_TAG=Dockge
-      - WATCHTOWER_SCOPE=dockge
-      - TZ=${TIMEZONE}
-    command: --schedule "0 0 4 * * *" --cleanup
-    labels:
-      - com.centurylinklabs.watchtower.scope=dockge
-  # Read-only Docker API facade: only CONTAINERS and IMAGES are exposed, and
-  # POST is denied, so clients talking through this proxy can inspect but
-  # not create, start, stop, or remove anything. Sits on an internal
-  # (egressless) bridge so only services on that network can reach it.
-  docker-socket-proxy:
-    image: ${SOCKET_PROXY_IMAGE}:${SOCKET_PROXY_TAG}
-    container_name: docker-socket-proxy
-    restart: unless-stopped
-    privileged: true
-    environment:
-      - CONTAINERS=1
-      - IMAGES=1
-      - POST=0
-      - TZ=${TIMEZONE}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - socket-proxy
-    # Deliberately unscoped: pin and bump this one manually. Running the
-    # updater through the thing it is updating would guarantee an outage.
-  watchtower-portainer:
-    image: ${WATCHTOWER_IMAGE}:${WATCHTOWER_TAG}
-    container_name: watchtower-portainer
-    restart: unless-stopped
-    depends_on:
-      - docker-socket-proxy
-    environment:
-      - DOCKER_HOST=tcp://docker-socket-proxy:2375
-      - WATCHTOWER_NOTIFICATION_URL=${NOTIFICATION_URL}
-      - WATCHTOWER_NOTIFICATIONS_HOSTNAME=${HN}
-      - WATCHTOWER_NOTIFICATION_TITLE_TAG=Portainer
-      - WATCHTOWER_SCOPE=portainer
-      - WATCHTOWER_MONITOR_ONLY=true
-      - TZ=${TIMEZONE}
-    # 05:30 so notifications land after the 04:00 dockge-scope run.
-    command: --schedule "0 30 5 * * *"
-    networks:
-      - socket-proxy
-      - default
-    labels:
-      - com.centurylinklabs.watchtower.scope=portainer
-networks:
-  socket-proxy:
-    driver: bridge
-    internal: true
 EOF
 
-# Portainer Compose File with Agent.
-# The agent exists so a remote Portainer can manage this VM via tcp/9001;
-# the local portainer-ce would reach docker.sock directly either way.
-# deploy.restart_policy is swarm-only — docker compose up ignores it — so
-# the restart behaviour is set at the service level with `restart:`.
-#
-# --admin-password-file reads a PLAINTEXT password file at FIRST start and
-# bcrypt-hashes it into the database. Once an admin exists the flag is
-# ignored, so this closes the five-minute race where anyone on the network
-# could reach :9443 and claim the admin account before you.
-#
-# scope=portainer labels pair with watchtower-portainer (monitor-only) in
-# dockge-compose.yml: updates are detected and sent to the notification
-# channel but never applied — Portainer stays on a pinned tag you bump.
-cat <<EOF >"$TEMP_DIR/portainer-compose.yml"
-name: portainer
-services:
-  portainer-agent:
-    container_name: portainer-agent
-    image: portainer/agent:${PORTAINER_AGENT_TAG}
-    restart: unless-stopped
-    ports:
-      - 9001:9001
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/volumes:/var/lib/docker/volumes
-    environment:
-      - TZ=${TIMEZONE}
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 1024M
-    labels:
-      - com.centurylinklabs.watchtower.scope=portainer
-  portainer:
-    container_name: portainer
-    image: portainer/portainer-ce:${PORTAINER_CE_TAG}
-    restart: unless-stopped
-    command: --admin-password-file=/run/secrets/portainer_admin_password
-    ports:
-      - 8000:8000
-      - 9443:9443
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - portainer_data:/data
-      - /opt/portainer_secrets/portainer_admin_password:/run/secrets/portainer_admin_password:ro
-    environment:
-      - TZ=${TIMEZONE}
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 1024M
-    labels:
-      - com.centurylinklabs.watchtower.scope=portainer
-volumes:
-  portainer_data:
-    name: portainer_data
-EOF
+# Build-time values for the first-boot script; %q keeps them shell-safe.
+printf 'VM_HOSTNAME=%q\nTIMEZONE=%q\n' "$HN" "$TIMEZONE" >"$TEMP_DIR/firstboot.env"
 
-# One-shot startup script
-cat <<EOF >"$TEMP_DIR/initial-startup.sh"
+# First-boot script. Quoted heredoc: nothing in it is expanded here.
+cat <<'EOF' >"$TEMP_DIR/initial-startup.sh"
 #!/bin/bash
-# Start Dockge Stack
-cd /opt/stacks/dockge
-/usr/bin/docker compose up -d
-# Start Portainer Stack
-cd /opt/stacks/portainer
-/usr/bin/docker compose up -d
-# Disable this service
+# First-boot provisioning, run by initial-startup.service until it succeeds.
+#
+# Dockhand starts with authentication disabled and lets whoever reaches it
+# first create the admin account. To close that window it is first
+# published on 127.0.0.1 only, configured and locked down through its API
+# from here, and republished on the LAN only after an unauthenticated API
+# call is refused. Any failure exits non-zero with Dockhand still on
+# loopback; the unit stays enabled and retries on the next boot.
+set -euo pipefail
+
+# VM_HOSTNAME and TIMEZONE, written by docker-stack-vm.sh.
+# shellcheck source=/dev/null
+. /opt/dockhand/firstboot.env
+
+API=http://127.0.0.1:3000/api
+SECRETS=/opt/dockhand_secrets
+UPDATE_CRON="0 4 * * *"
+
+log() { echo "[initial-startup] $*"; }
+
+# api METHOD PATH [JSON]: call the local Dockhand API and print the response
+# body. The JSON body goes in on stdin so secrets never reach a command line.
+# Fails on HTTP >= 400.
+api() {
+  local method=$1 path=$2 body=${3:-} out code
+  out=$(mktemp)
+  code=$(printf '%s' "$body" | curl -sS -o "$out" -w '%{http_code}' -X "$method" \
+    -H 'Content-Type: application/json' --data-binary @- "$API$path") || code=000
+  cat "$out"
+  rm -f "$out"
+  if [ "$code" -ge 400 ] || [ "$code" = 000 ]; then
+    log "$method $path failed (HTTP $code)" >&2
+    return 1
+  fi
+}
+
+# py CODE [ARGS...]: run a small Python snippet (stdin = previous API reply).
+py() { python3 -c "$1" "${@:2}"; }
+
+# Optional Dockge (installed only when chosen in the wizard).
+if [ -f /opt/stacks/dockge/compose.yaml ]; then
+  (cd /opt/stacks/dockge && docker compose up -d)
+fi
+
+cd /opt/dockhand
+DOCKHAND_BIND=127.0.0.1 docker compose up -d
+for _ in $(seq 1 90); do
+  curl -s -o /dev/null "$API/auth/settings" && break
+  sleep 2
+done
+
+# Once authentication is on, anonymous API calls get 401: an earlier run
+# finished seeding (it may have failed later, e.g. while republishing).
+if [ "$(curl -s -o /dev/null -w '%{http_code}' "$API/environments")" = 401 ]; then
+  log "Dockhand authentication is already enabled; skipping seeding."
+else
+  # 1. Local Docker environment (reused if an earlier partial run made it).
+  ENV_ID=$(api GET /environments | py 'import json,sys
+for e in json.load(sys.stdin):
+    if e.get("connectionType") == "socket":
+        print(e["id"]); break')
+  if [ -z "$ENV_ID" ]; then
+    ENV_ID=$(api POST /environments "$(py 'import json,sys; print(json.dumps({"name": sys.argv[1], "connectionType": "socket", "socketPath": "/var/run/docker.sock"}))' "$VM_HOSTNAME")" \
+      | py 'import json,sys; print(json.load(sys.stdin)["id"])')
+  fi
+  log "Docker environment id: $ENV_ID"
+
+  # 2. Scan /opt/stacks for stacks, and run schedules in local time.
+  api POST /settings/general "$(py 'import json,sys; print(json.dumps({"externalStackPaths": ["/opt/stacks"], "defaultTimezone": sys.argv[1]}))' "$TIMEZONE")" >/dev/null
+
+  # 3. Nightly update check that applies updates, unless the new image has
+  #    more known vulnerabilities than the one it replaces.
+  api POST "/environments/$ENV_ID/update-check" "$(py 'import json,sys; print(json.dumps({"enabled": True, "cron": sys.argv[1], "autoUpdate": True, "vulnerabilityCriteria": "more_than_current"}))' "$UPDATE_CRON")" >/dev/null
+  log "Auto-update scheduled: '$UPDATE_CRON' ($TIMEZONE)"
+
+  # 4. Optional notification channel for update results. A bad URL is
+  #    logged, not fatal: it can be fixed later under Settings > Notifications.
+  if [ -s "$SECRETS/notification_url" ] &&
+    ! api GET /notifications | py 'import json,sys; sys.exit(0 if any(n.get("name") == "Update results" for n in json.load(sys.stdin)) else 1)'; then
+    if NOTIF_ID=$(api POST /notifications "$(py 'import json,sys; print(json.dumps({"type": "apprise", "name": "Update results", "enabled": True, "config": {"urls": [open(sys.argv[1]).read().strip()]}}))' "$SECRETS/notification_url")" \
+        | py 'import json,sys; print(json.load(sys.stdin)["id"])') &&
+      api POST "/environments/$ENV_ID/notifications" '{"notificationId": '"$NOTIF_ID"', "enabled": true, "eventTypes": ["auto_update_success", "auto_update_failed", "auto_update_blocked"]}' >/dev/null; then
+      log "Notification channel added."
+    else
+      log "WARNING: could not add the notification channel; add it in Dockhand under Settings > Notifications."
+    fi
+  fi
+
+  # 5. Adopt stacks already in /opt/stacks (Dockge, when installed).
+  STACKS_JSON=$(api POST /stacks/scan '{}' | py 'import json,sys
+d = json.load(sys.stdin)
+print(json.dumps({"stacks": [{"name": s["name"], "composePath": s["composePath"]} for s in d.get("discovered", [])], "environmentId": int(sys.argv[1])}))' "$ENV_ID")
+  if [ "$(py 'import json,sys; print(len(json.loads(sys.argv[1])["stacks"]))' "$STACKS_JSON")" -gt 0 ]; then
+    api POST /stacks/adopt "$STACKS_JSON" >/dev/null || log "WARNING: adopting existing stacks failed; use Stacks > Scan in Dockhand."
+  fi
+
+  # 6. Admin account, then authentication on. Last, so a failure above
+  #    leaves nothing half locked.
+  if ! api GET /users | py 'import json,sys; sys.exit(0 if any(u.get("username") == "admin" for u in json.load(sys.stdin)) else 1)'; then
+    api POST /users "$(py 'import json,sys; print(json.dumps({"username": "admin", "password": open(sys.argv[1]).read()}))' "$SECRETS/admin_password")" >/dev/null
+  fi
+  api PUT /auth/settings '{"authEnabled": true, "defaultProvider": "local"}' >/dev/null
+  log "Admin account created and authentication enabled."
+fi
+
+# Publish on the LAN only once the API refuses anonymous requests.
+code=$(curl -s -o /dev/null -w '%{http_code}' "$API/environments")
+if [ "$code" != 401 ]; then
+  log "ERROR: anonymous API request returned HTTP $code, not 401; leaving Dockhand on 127.0.0.1."
+  exit 1
+fi
+docker compose up -d
+log "Dockhand published on port 3000."
+
+rm -f "$SECRETS/admin_password" "$SECRETS/notification_url"
 systemctl disable initial-startup.service
 EOF
 
-# systemd service file
+# systemd service file. The script disables it only after it succeeds, so a
+# failed first boot is retried on the next one.
 cat <<EOF >"$TEMP_DIR/initial-startup.service"
 [Unit]
 Description=Initial Docker Stacks Startup
@@ -742,11 +756,13 @@ msg_info "Customizing Debian 13 Qcow2 Disk Image"
 (
   umask 077
   printf '%s\n' "$ROOT_PASSWORD" > "$TEMP_DIR/rootpw"
-  # Portainer admin password file: plaintext, no trailing newline (Portainer
-  # reads the entire file as the password). 0600 inside 0700 $TEMP_DIR; the
-  # final file inside the VM is uploaded with 0600 and lives under
-  # /opt/portainer_secrets, outside Dockge's /opt/stacks view.
-  printf '%s' "$PORTAINER_ADMIN_PASSWORD" > "$TEMP_DIR/portainer_admin_password"
+  # Dockhand admin password and optional notification URL for the
+  # first-boot script: plaintext, no trailing newline. 0600 inside the 0700
+  # $TEMP_DIR; uploaded 0600 into /opt/dockhand_secrets (0700), outside the
+  # /opt/stacks view, and deleted by the first-boot script once Dockhand is
+  # seeded.
+  printf '%s' "$DOCKHAND_ADMIN_PASSWORD" > "$TEMP_DIR/dockhand_admin_password"
+  printf '%s' "$NOTIFICATION_URL" > "$TEMP_DIR/notification_url"
 )
 
 # Build the virt-customize invocation as an argv array so each payload is
@@ -762,20 +778,29 @@ cmd=(
   # Recommends), and without python3-venv setup.sh fails on first run.
   --install qemu-guest-agent,apt-transport-https,ca-certificates,curl,gnupg,lsb-release,openssh-server,git,python3-venv
   --hostname "$HN"
-  --run-command 'mkdir -p /opt/stacks/dockge /opt/stacks/portainer /opt/portainer_secrets'
-  --run-command 'chmod 0700 /opt/portainer_secrets'
+  --run-command 'mkdir -p /opt/stacks /opt/dockhand/data /opt/dockhand_secrets'
+  --run-command 'chmod 0700 /opt/dockhand_secrets'
   # Create a non-root user so paired stacks (e.g. qbittorrent-vpn-docker)
   # can run with PUID=1000/PGID=1000 instead of as root.
   --run-command 'id deploy >/dev/null 2>&1 || useradd -u 1000 -m -s /bin/bash deploy'
   --run-command 'getent group docker >/dev/null || groupadd docker; usermod -aG docker deploy || true'
-  --upload "$TEMP_DIR/dockge-compose.yml:/opt/stacks/dockge/docker-compose.yml"
-  --upload "$TEMP_DIR/portainer-compose.yml:/opt/stacks/portainer/docker-compose.yml"
-  --upload "$TEMP_DIR/portainer_admin_password:/opt/portainer_secrets/portainer_admin_password"
-  --chmod 0600:/opt/portainer_secrets/portainer_admin_password
+  --upload "$TEMP_DIR/dockhand-compose.yml:/opt/dockhand/compose.yaml"
+  --upload "$TEMP_DIR/firstboot.env:/opt/dockhand/firstboot.env"
+  --upload "$TEMP_DIR/dockhand_admin_password:/opt/dockhand_secrets/admin_password"
+  --chmod 0600:/opt/dockhand_secrets/admin_password
+  --upload "$TEMP_DIR/notification_url:/opt/dockhand_secrets/notification_url"
+  --chmod 0600:/opt/dockhand_secrets/notification_url
   --upload "$TEMP_DIR/initial-startup.sh:/usr/local/bin/initial-startup.sh"
   --upload "$TEMP_DIR/initial-startup.service:/etc/systemd/system/initial-startup.service"
   --chmod 0755:/usr/local/bin/initial-startup.sh
 )
+
+if [ "$INSTALL_DOCKGE" == "yes" ]; then
+  cmd+=(
+    --run-command 'mkdir -p /opt/stacks/dockge'
+    --upload "$TEMP_DIR/dockge-compose.yml:/opt/stacks/dockge/compose.yaml"
+  )
+fi
 
 if [ -n "$AUTHORIZED_KEY" ]; then
   # --ssh-inject appends to ~/.ssh/authorized_keys and handles perms/dir
@@ -804,9 +829,9 @@ cmd+=(
 )
 
 "${cmd[@]}" >/dev/null
-rm -f "$TEMP_DIR/rootpw" "$TEMP_DIR/portainer_admin_password"
+rm -f "$TEMP_DIR/rootpw" "$TEMP_DIR/dockhand_admin_password" "$TEMP_DIR/notification_url"
 
-msg_ok "Customized image with Docker, Dockge, and Portainer successfully"
+msg_ok "Customized image with Docker and Dockhand successfully"
 
 msg_info "Expanding root partition to use full disk space"
 qemu-img create -f qcow2 expanded.qcow2 ${DISK_SIZE} >/dev/null 2>&1
@@ -815,8 +840,12 @@ mv expanded.qcow2 ${FILE} >/dev/null 2>&1
 msg_ok "Expanded image to full size"
 
 msg_info "Creating the Docker VM"
+VM_TAGS="docker,dockhand,debian13"
+if [ "$INSTALL_DOCKGE" == "yes" ]; then
+  VM_TAGS="${VM_TAGS},dockge"
+fi
 qm create $VMID -agent 1${MACHINE} -tablet 0 -localtime 1 -bios ovmf${CPU_TYPE} -cores $CORE_COUNT -memory $RAM_SIZE \
-  -name $HN -tags docker,dockge,portainer,debian13 -net0 virtio,bridge=$BRG,macaddr=$MAC$VLAN$MTU -onboot 1 -ostype l26 -scsihw virtio-scsi-pci
+  -name $HN -tags "$VM_TAGS" -net0 virtio,bridge=$BRG,macaddr=$MAC$VLAN$MTU -onboot 1 -ostype l26 -scsihw virtio-scsi-pci
 pvesm alloc $STORAGE $VMID $DISK0 4M 1>&/dev/null
 qm importdisk $VMID ${FILE} $STORAGE ${DISK_IMPORT:-} 1>&/dev/null
 qm set $VMID \
@@ -827,20 +856,24 @@ qm set $VMID \
 
 qm set $VMID --agent enabled=1 >/dev/null
 
+DOCKGE_LINK=""
+if [ "$INSTALL_DOCKGE" == "yes" ]; then
+  DOCKGE_LINK="<p>Dockge (secondary): <strong><a href=\"http://${HN}:5001\" target=\"_blank\">http://${HN}:5001</a></strong></p>"
+fi
 DESCRIPTION=$(cat <<EOF
 <div align='center'>
-  <h2>Docker VM with Dockge & Portainer</h2>
-  <p>This VM comes pre-configured with Docker, Dockge, and Portainer.</p>
+  <h2>Docker VM with Dockhand</h2>
+  <p>This VM comes pre-configured with Docker and Dockhand.</p>
   <hr>
   <p>Find the VM's IP in the 'Summary' tab once it's running.</p>
-  <p>Access Dockge at: <strong><a href="http://${HN}:5001" target="_blank">http://${HN}:5001</a></strong></p>
-  <p>Access Portainer at: <strong><a href="https://${HN}:9443" target="_blank">https://${HN}:9443</a></strong></p>
+  <p>Access Dockhand at: <strong><a href="http://${HN}:3000" target="_blank">http://${HN}:3000</a></strong> (user <code>admin</code>)</p>
+  ${DOCKGE_LINK}
 </div>
 EOF
 )
 qm set "$VMID" -description "$DESCRIPTION" >/dev/null
 
-msg_ok "Created Docker VM with Dockge & Portainer ${CL}${BL}(${HN})"
+msg_ok "Created Docker VM with Dockhand ${CL}${BL}(${HN})"
 if [ "$START_VM" == "yes" ]; then
   msg_info "Starting Docker VM"
   qm start $VMID
