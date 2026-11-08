@@ -1,7 +1,6 @@
 name: External upstream watch
 
 # Monthly cron for the two upstream situations Renovate can't track:
-#   - Tecnativa/docker-socket-proxy PR #183 (CVE-2026-78122 fix) merging
 #   - Debian cloud team starting to sign per-distribution images
 #   - community-scripts/ProxmoxVE main having new commits touching misc/api.func
 #     since the pinned SHA
@@ -25,25 +24,6 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
-
-      - name: Tecnativa/docker-socket-proxy#183 (CVE-2026-78122 fix)
-        run: |
-          set -euo pipefail
-          title="docker-socket-proxy CVE-2026-78122 fix merged upstream"
-          pr=$(gh api repos/Tecnativa/docker-socket-proxy/pulls/183 \
-            --jq '{state:.state, merged:.merged, merged_at:.merged_at}')
-          echo "PR state: $pr"
-          merged=$(echo "$pr" | jq -r '.merged')
-          if [ "$merged" = "true" ]; then
-            existing=$(gh issue list -R "${{ github.repository }}" --state open \
-              --search "$title in:title" --json number --jq 'length')
-            if [ "$existing" = "0" ]; then
-              gh issue create -R "${{ github.repository }}" \
-                --title "$title" \
-                --label "security,breaking-candidate" \
-                --body "[Tecnativa/docker-socket-proxy#183](https://github.com/Tecnativa/docker-socket-proxy/pull/183) is merged upstream. Bump \`SOCKET_PROXY_TAG\` in \`docker-stack-vm.sh\` to the first release carrying the fix, remove the CVE residual note from \`SECURITY.md\` and \`README.md\`, and re-render the dockge-compose heredoc locally to confirm no env semantics changed."
-            fi
-          fi
 
       - name: Debian cloud image SHA512SUMS.sign
         run: |

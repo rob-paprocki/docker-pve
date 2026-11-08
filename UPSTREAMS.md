@@ -7,39 +7,35 @@ Two moving parts handle the automation:
 - [`.github/dependabot.yml`](.github/dependabot.yml) auto-bumps the one thing Dependabot can parse here: GitHub Actions versions in `.github/workflows/*.yml`. Non-major bumps are grouped on one Monday PR.
 - [`.github/workflows/label-major-bumps.yml`](.github/workflows/label-major-bumps.yml) adds the `breaking-candidate` label to any Dependabot PR crossing a major-version boundary. That label fires [`.github/workflows/claude-breaking-review.yml`](.github/workflows/claude-breaking-review.yml), which has Claude read the upstream changelog, grep this repo for the specific symbols flagged, and comment with a `REAL / NOT / UNCLEAR` verdict.
 
-Dependabot does not read bash scripts, so the five Docker image tags encoded as `${VAR:-default}` inside `docker-stack-vm.sh` are **hand-bumped**. The monthly [`.github/workflows/external-upstream-watch.yml`](.github/workflows/external-upstream-watch.yml) files GitHub issues when the three externally-blocked items are ready (CVE-2026-78122 fix lands, Debian starts signing cloud images, `community-scripts/api.func` drifts). For the other image tags, this file is the companion recipe: each section below has the source link, the breaking signals, and the hand-bump steps.
+Dependabot does not read bash scripts, so the two Docker image tags encoded as `${VAR:-default}` inside `docker-stack-vm.sh` are **hand-bumped**. The monthly [`.github/workflows/external-upstream-watch.yml`](.github/workflows/external-upstream-watch.yml) files GitHub issues when the two externally-blocked items are ready (Debian starts signing cloud images, `community-scripts/api.func` drifts). For the other image tags, this file is the companion recipe: each section below has the source link, the breaking signals, and the hand-bump steps.
 
 ## Container images (hand-bumped)
 
 The following tags live inside `docker-stack-vm.sh` as `${VAR:-default}` bash defaults. Dependabot cannot parse these; a bump is a one-line edit per variable followed by a shellcheck pass.
 
+### `fnsys/dockhand`
+
+- **Pinned at:** `DOCKHAND_TAG` default (currently `v1.0.57`); image name in `DOCKHAND_IMAGE` (also published as `ghcr.io/finsys/dockhand`).
+- **Source:** [`fnsys/dockhand`](https://hub.docker.com/r/fnsys/dockhand) on Docker Hub, [`Finsys/dockhand`](https://github.com/Finsys/dockhand) on GitHub. Business Source License 1.1; each version converts to Apache 2.0 four years after release.
+- **Breaking signals:** first boot drives Dockhand through its HTTP API, so any change to these breaks it. Breakage fails closed: Dockhand stays on `127.0.0.1` and `journalctl -u initial-startup` shows the failing call.
+  - `GET`/`POST /api/environments` (socket environment)
+  - `POST /api/settings/general` (`externalStackPaths`, `defaultTimezone`)
+  - `POST /api/environments/{id}/update-check` (`cron`, `autoUpdate`, `vulnerabilityCriteria: more_than_current`)
+  - `GET`/`POST /api/notifications`, `POST /api/environments/{id}/notifications` (event types `auto_update_success`, `auto_update_failed`, `auto_update_blocked`)
+  - `POST /api/stacks/scan` and `/api/stacks/adopt`
+  - `GET`/`POST /api/users`: creating the first user without a session while no admin exists, and that user becoming Admin
+  - `PUT /api/auth/settings` (`authEnabled`)
+  - anonymous API requests returning 401 once authentication is on
+  - the `DATA_DIR` and `STACKS_DIR` environment variables, and the 8-character password minimum the wizard mirrors
+- **Bump by hand:** change `DOCKHAND_TAG`, then render the heredocs and run `initial-startup.sh` against the new image on a scratch Docker host to confirm first boot still completes. On existing VMs, use Dockhand's own self-update, then set the same tag in `/opt/dockhand/compose.yaml`.
+
 ### `louislam/dockge`
 
-- **Pinned at:** `DOCKGE_TAG` default (currently `1.5.0`)
+- **Pinned at:** `DOCKGE_TAG` default (currently `1.5.0`). Optional: only installed when chosen in Advanced settings.
 - **Source:** [`louislam/dockge`](https://hub.docker.com/r/louislam/dockge) on Docker Hub, [GitHub releases](https://github.com/louislam/dockge/releases)
 - **Breaking signals:** major-version bumps; data-model changes documented in the release notes under "Migration" or "Breaking". Dockge's stack-folder layout is stable, but the UI auth model has moved before.
-- **Bump by hand:** change the `DOCKGE_TAG` default, re-render `dockge-compose.yml` locally with the heredoc, redeploy via Dockge.
-
-### `portainer/portainer-ce` and `portainer/agent`
-
-- **Pinned at:** `PORTAINER_CE_TAG` and `PORTAINER_AGENT_TAG` (both `2.45.3`)
-- **Source:** [Portainer releases](https://github.com/portainer/portainer/releases). CE and agent are tagged in lockstep by Portainer.
-- **Breaking signals:** database schema migrations between majors (2.x → 3.x will be one). Breaking CLI flag changes are rare. The `--admin-password-file` flag format (plaintext, read at first start) has been stable; if it ever changes, the admin pre-seed will silently fail.
-- **Bump by hand:** change both default tag values together. Agent and CE must match or Portainer's environment page will complain.
-
-### `ghcr.io/nicholas-fedor/watchtower`
-
-- **Pinned at:** `WATCHTOWER_TAG` default (currently `v1.23.2`)
-- **Source:** [`nicholas-fedor/watchtower`](https://github.com/nicholas-fedor/watchtower), the active community fork of the archived `containrrr/watchtower`.
-- **Breaking signals:** env var renames or label-prefix changes. The current prefix is `com.centurylinklabs.watchtower.*` and matches the containrrr era; a prefix rename would break every scope label in this repo at once. Monitor-only mode is `WATCHTOWER_MONITOR_ONLY=true`.
-- **Bump by hand:** change `WATCHTOWER_TAG`. Both Watchtower instances share the variable.
-
-### `ghcr.io/tecnativa/docker-socket-proxy`
-
-- **Pinned at:** `SOCKET_PROXY_TAG` default (currently `0.5.0`)
-- **Source:** [`Tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
-- **Breaking signals:** [CVE-2026-78122](https://app.opencve.io/cve/CVE-2026-78122) fix is in-flight at [PR #183](https://github.com/Tecnativa/docker-socket-proxy/pull/183); the first release carrying it will probably rework the `CONTAINERS` env semantics. Env variable additions beyond `CONTAINERS/IMAGES/POST` are not breaking for this repo (we don't use the others).
-- **Bump by hand:** change `SOCKET_PROXY_TAG`. If the fix release renames env variables, update the docker-socket-proxy service block in the dockge-compose heredoc.
+- **Bundled Compose:** Dockge runs its own copy of Docker Compose (v2.34.0 in 1.5.0), not the VM's `docker-compose-plugin`. When the two versions compute different `com.docker.compose.config-hash` values, a `docker compose up` from either side recreates every container the other side last created. On a bump, compare `docker exec dockge docker compose version` with `docker compose version` on the VM.
+- **Bump by hand:** change the `DOCKGE_TAG` default, re-render `dockge-compose.yml` locally with the heredoc. On existing VMs, edit the tag in `/opt/stacks/dockge/compose.yaml` and `docker compose up -d` there.
 
 ## Non-container upstreams
 
