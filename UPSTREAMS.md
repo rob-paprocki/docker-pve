@@ -18,6 +18,7 @@ The following tags live inside `docker-stack-vm.sh` as `${VAR:-default}` bash de
 - **Pinned at:** `DOCKGE_TAG` default (currently `1.5.0`)
 - **Source:** [`louislam/dockge`](https://hub.docker.com/r/louislam/dockge) on Docker Hub, [GitHub releases](https://github.com/louislam/dockge/releases)
 - **Breaking signals:** major-version bumps; data-model changes documented in the release notes under "Migration" or "Breaking". Dockge's stack-folder layout is stable, but the UI auth model has moved before.
+- **Bundled Compose:** Dockge runs its own copy of Docker Compose (v2.34.0 in 1.5.0), not the VM's `docker-compose-plugin`. When the two versions compute different `com.docker.compose.config-hash` values, a `docker compose up` from either side recreates every container the other side last created. On a bump, compare `docker exec dockge docker compose version` with `docker compose version` on the VM.
 - **Bump by hand:** change the `DOCKGE_TAG` default, re-render `dockge-compose.yml` locally with the heredoc, redeploy via Dockge.
 
 ### `portainer/portainer-ce` and `portainer/agent`

@@ -40,6 +40,7 @@ The VM also gets:
 * `qemu-guest-agent` installed and `--agent 1` set, so the PVE UI can read the IP and gracefully stop the VM.
 * A `deploy` non-root user (uid 1000, in the `docker` group) so stacks that run as `PUID=1000`/`PGID=1000` (such as [qbittorrent-vpn-docker](https://github.com/rob-paprocki/qbittorrent-vpn-docker)) can own `/opt/stacks/*/<data>` directly.
 * `/opt/stacks/` pre-populated with `dockge/` and `portainer/`, plus a one-shot `initial-startup.service` that runs `docker compose up -d` for both before deleting itself.
+* `git` and `python3-venv`, so the paired stack can be cloned and its host-side setup editor (`scripts/setup.sh`) can build its Python venv. The Debian 13 `nocloud` image ships `python3` but neither of these.
 
 ## Options the wizard asks about
 
@@ -76,13 +77,15 @@ Firewall ports **5001 / 8000 / 9443 / 9001** off the WAN side; put a reverse pro
 Once the VM is up:
 
 1. Visit `http://<vm-ip>:5001` and create the Dockge admin.
-2. Visit `https://<vm-ip>:9443` and log in to Portainer as `admin` with the password you set in the wizard. The admin account is pre-seeded, so there is no first-boot window to race.
+2. Visit `https://<vm-ip>:9443` and log in to Portainer as `admin` with the password you set in the wizard. The admin account is pre-seeded, so there is no first-boot window to race. Portainer then opens its Environment Wizard; choose **Get Started** to connect the local Docker environment.
 3. Deploy a stack. For the paired VPN'd qBittorrent setup:
    ```bash
    cd /opt/stacks
-   git clone https://github.com/rob-paprocki/qbittorrent-vpn-docker.git
-   # follow that repo's README to fill in .env, then up it from Dockge or the CLI
+   git clone https://github.com/rob-paprocki/qbittorrent-vpn-docker.git torrent-stack
+   cd torrent-stack
+   # follow that repo's README: ./scripts/setup.sh serves the env-editor on :9191
    ```
+   Clone into `torrent-stack`, not the default `qbittorrent-vpn-docker` folder. Dockge names stacks after their folder, while Docker names the project from `name: torrent-stack` in the compose file. With mismatched names Dockge shows two entries: an inactive one you can edit, and an active one marked "not managed by Dockge". The paired README also explains why its env-editor, not Dockge's Start/Update buttons, should handle restarts.
 
 ## Round-3 backlog
 
