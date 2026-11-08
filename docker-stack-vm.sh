@@ -555,11 +555,12 @@ msg_info "Creating Docker stack configuration files"
 # Dockge Compose File
 #
 # Two Watchtower instances with distinct scopes:
-#   - watchtower (scope=dockge) auto-updates Dockge, itself, and the stacks
-#     Dockge manages. Needs the raw Docker socket because container updates
-#     require POST /containers/create (recreate), which the socket proxy
-#     would also have to allow — so the proxy would not meaningfully reduce
-#     this instance's authority.
+#   - watchtower (scope=dockge) auto-updates Dockge and itself. Stacks
+#     deployed later through Dockge are left alone unless their services
+#     carry the scope=dockge label. Needs the raw Docker socket because
+#     container updates require POST /containers/create (recreate), which
+#     the socket proxy would also have to allow — so the proxy would not
+#     meaningfully reduce this instance's authority.
 #   - watchtower-portainer (scope=portainer, --monitor-only) ONLY notifies
 #     when Portainer or portainer-agent have an update available. Because
 #     it never writes, it talks to the Docker API through docker-socket-
@@ -754,7 +755,12 @@ msg_info "Customizing Debian 13 Qcow2 Disk Image"
 cmd=(
   virt-customize -q -a "$FILE"
   --root-password "file:$TEMP_DIR/rootpw"
-  --install qemu-guest-agent,apt-transport-https,ca-certificates,curl,gnupg,lsb-release,openssh-server
+  # git and python3-venv serve the paired qbittorrent-vpn-docker stack: its
+  # README clones the repo into /opt/stacks, and its scripts/setup.sh builds
+  # a Python venv for the env-editor. The Debian 13 nocloud image ships
+  # python3 but neither of these (git otherwise only arrives as a docker-ce
+  # Recommends), and without python3-venv setup.sh fails on first run.
+  --install qemu-guest-agent,apt-transport-https,ca-certificates,curl,gnupg,lsb-release,openssh-server,git,python3-venv
   --hostname "$HN"
   --run-command 'mkdir -p /opt/stacks/dockge /opt/stacks/portainer /opt/portainer_secrets'
   --run-command 'chmod 0700 /opt/portainer_secrets'
