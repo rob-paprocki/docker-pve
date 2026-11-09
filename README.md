@@ -21,7 +21,7 @@ It pairs with [qbittorrent-vpn-docker](https://github.com/rob-paprocki/qbittorre
 
 - **Dockhand is password-protected before port 3000 opens.** First boot creates Dockhand's `admin` account and turns its login on while Dockhand listens only on `127.0.0.1`, then publishes it on port 3000. If a required step fails, Dockhand stays on `127.0.0.1` and setup runs again on the next boot.
 - **Nothing left to install.** Docker, the packages and the first-boot service go into Debian's official cloud image before the VM starts.
-- **Containers kept up to date.** Every night at 04:00, host time, Dockhand updates the containers' images, but blocks an update whose new image has more known vulnerabilities than the running one. It can send the results to a notification channel. Debian's own packages are [up to you](#troubleshooting-and-faq).
+- **Containers kept up to date.** Every night at 04:00, host time, Dockhand updates the containers' images. It can also hold back an update whose new image has more known vulnerabilities than the running one, but only after you turn on a vulnerability scanner, which is off by default. It can send the results to a notification channel. Debian's own packages are [up to you](#troubleshooting-and-faq).
 - **Careful with secrets and remote code.** Passwords never go on a command line, and their first-boot copies are deleted once setup succeeds. The community-scripts helper file is pinned by commit, and the Dockhand and Dockge images by tag.
 - **Ready for the paired stack.** A `deploy` user with uid and gid 1000 in the `docker` group, plus `git` and `python3-venv`.
 
@@ -188,9 +188,9 @@ On first boot, `initial-startup.service` sets Dockhand up with:
 
 - the VM's local Docker socket as its environment, named after the VM's hostname;
 - `/opt/stacks` as the folder it scans for stacks, and as the folder for stacks you create in Dockhand;
-- a nightly update at 04:00 in the Proxmox host's timezone, which checks every container for a newer image and updates it. If the new image has more known vulnerabilities than the one it replaces, the update is blocked and reported instead;
+- a nightly update at 04:00 in the Proxmox host's timezone, which checks every container for a newer image and updates it. The rule to block an update whose new image has more known vulnerabilities is set too, but Dockhand ships with no scanner, so until you pick one under **Settings → Environments →** the VM's environment **→ Security → Vulnerability scanning** every update goes through unchecked;
 - the stacks already in `/opt/stacks` adopted, which at first boot means Dockge's own stack if you installed it;
-- a notification channel called "Update results" for succeeded, failed and blocked updates, if you gave a notification URL;
+- a notification channel called "Update results" for succeeded, failed and blocked updates (blocked ones need a scanner), if you gave a notification URL;
 - an `admin` account, with local authentication on.
 
 Containers that share another container's network (the paired stack's qBittorrent shares Gluetun's) are reconnected when the nightly update replaces that container.
@@ -227,7 +227,7 @@ The other risks you accept:
 
 - Dockhand, and Dockge when installed, have unrestricted access to `/var/run/docker.sock` on the guest, so a compromise of either is root on the guest. Dockhand also runs as root inside its container, which is its default.
 - The `deploy` user is in the `docker` group, which is equivalent to root on the guest.
-- The nightly update pulls and applies new images automatically. Blocking updates that add known vulnerabilities doesn't catch a malicious image with no known CVEs.
+- The nightly update pulls and applies new images automatically, with no vulnerability check until you turn on a scanner (**Settings → Environments →** the VM's environment **→ Security → Vulnerability scanning**). With one on, it still can't catch a malicious image that has no known CVEs.
 - Dockge has no first-boot lock-down; see [After it finishes](#after-it-finishes).
 
 [SECURITY.md](.github/SECURITY.md) lists the same risks and says how to report a new one.

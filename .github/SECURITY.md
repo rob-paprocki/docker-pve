@@ -22,7 +22,7 @@ Root inside the Dockhand container. Dockhand runs as root inside its container, 
 
 The `deploy` user. It is in the `docker` group, which is equivalent to root on the guest.
 
-Automatic image updates. Dockhand pulls and applies new images nightly. It blocks an update whose image has more known vulnerabilities than the running one, which does not catch a malicious image with no known CVEs.
+Automatic image updates. Dockhand pulls and applies new images nightly. Its scanner is off by default, so nothing is checked for known vulnerabilities until you choose one in Dockhand (Settings → Environments → the VM's environment → Security → Vulnerability scanning). With a scanner on, Dockhand blocks an update whose image has more known vulnerabilities than the running one, which still does not catch a malicious image with no known CVEs.
 
 Plain HTTP. Dockhand (port 3000) and Dockge (port 5001) serve HTTP only, so logins cross the network in the clear unless a TLS reverse proxy fronts them.
 
