@@ -56,13 +56,18 @@ Keep these elements, and add them when they're missing:
 - badges (licence, latest release, CI) at the top;
 - one sentence saying what the project is for, then a short paragraph on who it's for and what problem it solves;
 - a highlights list;
-- a diagram (Mermaid renders on GitHub) where it explains the architecture or flow better than prose;
+- a diagram where it explains the architecture or flow better than prose (see **Images and diagrams** below);
 - a quick start someone can copy and paste, with its requirements;
 - usage and configuration, using tables for options and defaults;
 - troubleshooting or FAQ, using `<details>` blocks for long answers;
 - how to get help, how to contribute, the licence, and credits.
 
 Use GitHub alerts (`> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]`, `> [!CAUTION]`) for things a reader must not miss, and sparingly.
+
+### Images and diagrams
+
+- **No Mermaid**, or any other diagram that GitHub draws in the browser. The GitHub mobile app shows those as raw code. A diagram is a committed image, generated from a source file kept in the repository with a free and open-source tool, and the command that regenerates it is written next to the source.
+- **Every image must suit the reader's theme**, light or dark, on github.com and in the GitHub mobile app. That covers diagrams, screenshots, logos and badges. Before merging, look at each one in both themes on a phone-width screen.
 
 ## Writing anything a user will read
 
