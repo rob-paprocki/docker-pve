@@ -15,6 +15,7 @@ The script builds a new VM each time it runs and leaves existing VMs alone, so a
 - `CHANGELOG.md`, with a version back-filled for every merged PR.
 - `CLAUDE.md`, the project rules for versioning, the changelog, the README and user-facing text.
 - The humanizer and structural-humanizer skills under `.claude/skills/`, vendored from [NulightJens/humanizer-stack](https://github.com/NulightJens/humanizer-stack) at commit `13f5c02` under its MIT licence, for editing user-facing text.
+- `ROADMAP.md`, which lists planned work and links each item to its issue ([#15](https://github.com/rob-paprocki/docker-pve/pull/15)).
 
 ### Changed
 

@@ -4,6 +4,8 @@ Pull requests are welcome. The repository's rules are in [CLAUDE.md](CLAUDE.md) 
 
 To report a security vulnerability, don't open a pull request or a public issue; follow [SECURITY.md](.github/SECURITY.md).
 
+Planned work is in [ROADMAP.md](ROADMAP.md), with an issue for each item.
+
 ## Before you open a pull request
 
 - Open the pull request against `main`. The [pull request template](.github/pull_request_template.md) asks for a summary, a test plan and a one-line rollback.
