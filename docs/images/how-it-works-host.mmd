@@ -1,0 +1,10 @@
+flowchart TD
+  %% How it works, part 1: docker-stack-vm.sh on the Proxmox host.
+  %% Source for how-it-works-host.svg (and its -light/-dark renders).
+  %% After editing, regenerate them from the repo root: docs/images/render.sh
+  S["On the Proxmox host:<br/>docker-stack-vm.sh"]:::start --> A
+  A["Fetch api.func, ask to<br/>proceed, then check root,<br/>amd64, Proxmox VE 8<br/>or 9, and SSH"] --> B["Wizard: Default or<br/>Advanced, then the<br/>storage pool"]
+  B --> C["Download the Debian 13<br/>nocloud image and check<br/>it against SHA512SUMS"]
+  C --> D["virt-customize: root<br/>password, packages, deploy<br/>user, compose files, secrets,<br/>initial-startup.service,<br/>Docker CE"]
+  D --> E["virt-resize to the chosen<br/>disk size, qm create,<br/>import the disk, start<br/>the VM if you chose to"]
+  classDef start rx:14,ry:14

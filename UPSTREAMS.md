@@ -56,10 +56,17 @@ The following tags live inside `docker-stack-vm.sh` as `${VAR:-default}` bash de
 
 ### GitHub Actions
 
-- **Pinned at:** inside `.github/workflows/*.yml` (`actions/checkout@v4`, `ludeeus/action-shellcheck@2.0.0`, `anthropics/claude-code-action@v1`)
+- **Pinned at:** inside `.github/workflows/*.yml` (`actions/checkout@v7`, `ludeeus/action-shellcheck@2.0.0`, `anthropics/claude-code-action@v1`)
 - **Source:** each action's own GitHub repo.
 - **Breaking signals:** `v1` → `v2` major on `claude-code-action` is the one most likely to actually require changes (prompt / input renames).
 - **Auto-tracked:** yes, by Dependabot (`github-actions` ecosystem). Non-major bumps group on a Monday PR; majors land solo and get labelled `breaking-candidate` by `label-major-bumps.yml`.
+
+### Diagram tools (`docs/images/`)
+
+- **Pinned at:** `docs/images/package.json` and `package-lock.json`: `@mermaid-js/mermaid-cli` 12.0.0, `mermaid` 12.3.0 (an npm `overrides` entry) and `puppeteer` 25.13.0.
+- **Used for:** rendering the README diagrams with `docs/images/render.sh` (see CLAUDE.md, "Images and diagrams"). Nothing here runs on a Proxmox host or in the VM.
+- **Breaking signals:** a Mermaid release that changes layout, the `classic` look or label wrapping shows up as different SVGs after a re-render; `postprocess.py` refuses to build the theme-aware SVG if the light and dark renders stop matching outside their stylesheet.
+- **Bump by hand:** change the versions in `docs/images/package.json`, run `npm install --package-lock-only` in `docs/images/` to refresh the lock file, run `docs/images/render.sh`, and check every diagram again at phone width in both themes. Not tracked by Dependabot.
 
 ## How to add a new pinned dep
 

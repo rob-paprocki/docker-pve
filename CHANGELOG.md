@@ -19,6 +19,8 @@ The script builds a new VM each time it runs and leaves existing VMs alone, so a
 ### Changed
 
 - README reorganised. The script behaves the same.
+- README: the "How it works" diagram was a Mermaid diagram, which the GitHub mobile app shows as raw code. It is now two committed images that follow your light or dark theme. The badges are easier to read in both themes. The release badge showed an error because no release is published yet; it now shows the latest version in this changelog.
+- README: Quick start now comes before How it works, wide tables are now lists that fit a phone screen, and step 4 of "After it finishes" follows the paired stack's own setup, which creates the folders FileBrowser needs. The README also has a new FAQ entry on keeping Debian on the VM patched, and Known limitations now says what has been tested. The contributing notes moved to a separate [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [4.0.0] - 2026-11-08
 
