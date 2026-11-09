@@ -684,8 +684,9 @@ for e in json.load(sys.stdin):
   # 2. Scan /opt/stacks for stacks, and run schedules in local time.
   api POST /settings/general "$(py 'import json,sys; print(json.dumps({"externalStackPaths": ["/opt/stacks"], "defaultTimezone": sys.argv[1]}))' "$TIMEZONE")" >/dev/null
 
-  # 3. Nightly update check that applies updates, unless the new image has
-  #    more known vulnerabilities than the one it replaces.
+  # 3. Nightly update check that applies updates. The more_than_current rule
+  #    only blocks anything once a vulnerability scanner is chosen in Dockhand;
+  #    the scanner defaults to none, and this script leaves it that way.
   api POST "/environments/$ENV_ID/update-check" "$(py 'import json,sys; print(json.dumps({"enabled": True, "cron": sys.argv[1], "autoUpdate": True, "vulnerabilityCriteria": "more_than_current"}))' "$UPDATE_CRON")" >/dev/null
   log "Auto-update scheduled: '$UPDATE_CRON' ($TIMEZONE)"
 
