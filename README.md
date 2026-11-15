@@ -73,6 +73,24 @@ The script does all its work on the Proxmox host, on a downloaded copy of Debian
   <img alt="Flowchart of what docker-stack-vm.sh does on the Proxmox host, in five steps. First it fetches api.func, asks to proceed, and checks for root, amd64, Proxmox VE 8 or 9, and an SSH session. Then the wizard runs, Default or Advanced, and asks for the storage pool. Next the script downloads the Debian 13 nocloud image and checks it against SHA512SUMS. virt-customize writes the root password, packages, the deploy user, compose files, secrets, initial-startup.service and Docker CE into the image. Last, virt-resize sets the image to your disk size, qm create makes the VM, the disk is imported, and the VM starts if you chose that." src="docs/images/how-it-works-host-light.svg">
 </picture>
 
+<details>
+<summary>Diagram source (Mermaid)</summary>
+
+```mermaid
+flowchart TD
+  %% How it works, part 1: docker-stack-vm.sh on the Proxmox host.
+  %% Source for how-it-works-host.svg (and its -light/-dark renders).
+  %% After editing, regenerate them from the repo root: docs/images/render.sh
+  S["On the Proxmox host:<br/>docker-stack-vm.sh"]:::start --> A
+  A["Fetch api.func, ask to<br/>proceed, then check root,<br/>amd64, Proxmox VE 8<br/>or 9, and SSH"] --> B["Wizard: Default or<br/>Advanced, then the<br/>storage pool"]
+  B --> C["Download the Debian 13<br/>nocloud image and check<br/>it against SHA512SUMS"]
+  C --> D["virt-customize: root<br/>password, packages, deploy<br/>user, compose files, secrets,<br/>initial-startup.service,<br/>Docker CE"]
+  D --> E["virt-resize to the chosen<br/>disk size, qm create,<br/>import the disk, start<br/>the VM if you chose to"]
+  classDef start rx:14,ry:14
+```
+
+</details>
+
 On the host, the script:
 
 1. Fetches `api.func`, asks you to confirm, and checks for root, amd64 and Proxmox VE 8 or 9. Over SSH it asks you to confirm again.
@@ -85,6 +103,31 @@ On the host, the script:
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/how-it-works-vm-dark.svg">
   <img alt="Flowchart of the first boot in the VM, run by initial-startup.service. It starts Dockge on port 5001 if you chose it, then starts Dockhand on 127.0.0.1 port 3000 and waits for its API. Then comes a question. Does Dockhand refuse an anonymous API request? No means it isn't set up yet, so the unit configures it through the API (Docker environment, /opt/stacks, 04:00 updates, notifications, adopting existing stacks), then creates the admin account and turns authentication on. Yes means an earlier boot already did this. Either way, the same question comes again. Does Dockhand refuse an anonymous API request now? If yes, the unit republishes Dockhand on port 3000, deletes the secrets and disables itself. If no, or if a required call failed during setup, it exits with an error, Dockhand stays on 127.0.0.1, and the unit runs again on the next boot." src="docs/images/how-it-works-vm-light.svg">
 </picture>
+
+<details>
+<summary>Diagram source (Mermaid)</summary>
+
+```mermaid
+flowchart TD
+  %% How it works, part 2: initial-startup.service on the VM's first boot.
+  %% Source for how-it-works-vm.svg (and its -light/-dark renders).
+  %% After editing, regenerate them from the repo root: docs/images/render.sh
+  S["In the VM on first boot:<br/>initial-startup.service"]:::start --> F
+  F["Start Dockge on<br/>port 5001 (only<br/>if you chose it)"] --> G["Start Dockhand<br/>on 127.0.0.1:3000<br/>and wait for<br/>its API"]
+  G --> H{{"Does Dockhand<br/>refuse an<br/>anonymous API<br/>request?"}}
+  H -->|"No: not<br/>set up yet"| I["Configure it<br/>through the API:<br/>Docker<br/>environment,<br/>/opt/stacks,<br/>04:00 updates,<br/>notifications,<br/>adopt existing<br/>stacks"]
+  I --> J["Create the<br/>admin account,<br/>turn<br/>authentication on"]
+  J --> K{{"Does Dockhand<br/>refuse an<br/>anonymous API<br/>request now?"}}
+  H -->|"Yes: an<br/>earlier boot<br/>did this"| K
+  K -->|Yes| L["Republish<br/>Dockhand on<br/>port 3000,<br/>delete the<br/>secrets and<br/>disable the unit"]
+  K -->|No| M["Exit with an<br/>error. Dockhand<br/>stays on<br/>127.0.0.1 and<br/>the unit runs<br/>again on the<br/>next boot"]
+  I -.-> X("A required<br/>call fails")
+  J -.-> X
+  X -.-> M
+  classDef start rx:14,ry:14
+```
+
+</details>
 
 On first boot, `initial-startup.service`:
 

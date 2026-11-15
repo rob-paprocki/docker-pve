@@ -10,6 +10,13 @@ The script builds a new VM each time it runs and leaves existing VMs alone, so a
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-11-15
+**Upgrading:** nothing to do.
+
+### Changed
+
+- Each diagram in the README has its Mermaid source in a collapsed section under the picture.
+
 ## [4.1.0] - 2026-11-15
 **Upgrading:** nothing to do.
 
