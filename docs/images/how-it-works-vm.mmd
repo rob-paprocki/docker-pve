@@ -1,0 +1,17 @@
+flowchart TD
+  %% How it works, part 2: initial-startup.service on the VM's first boot.
+  %% Source for how-it-works-vm.svg (and its -light/-dark renders).
+  %% After editing, regenerate them from the repo root: docs/images/render.sh
+  S["In the VM on first boot:<br/>initial-startup.service"]:::start --> F
+  F["Start Dockge on<br/>port 5001 (only<br/>if you chose it)"] --> G["Start Dockhand<br/>on 127.0.0.1:3000<br/>and wait for<br/>its API"]
+  G --> H{{"Does Dockhand<br/>refuse an<br/>anonymous API<br/>request?"}}
+  H -->|"No: not<br/>set up yet"| I["Configure it<br/>through the API:<br/>Docker<br/>environment,<br/>/opt/stacks,<br/>04:00 updates,<br/>notifications,<br/>adopt existing<br/>stacks"]
+  I --> J["Create the<br/>admin account,<br/>turn<br/>authentication on"]
+  J --> K{{"Does Dockhand<br/>refuse an<br/>anonymous API<br/>request now?"}}
+  H -->|"Yes: an<br/>earlier boot<br/>did this"| K
+  K -->|Yes| L["Republish<br/>Dockhand on<br/>port 3000,<br/>delete the<br/>secrets and<br/>disable the unit"]
+  K -->|No| M["Exit with an<br/>error. Dockhand<br/>stays on<br/>127.0.0.1 and<br/>the unit runs<br/>again on the<br/>next boot"]
+  I -.-> X("A required<br/>call fails")
+  J -.-> X
+  X -.-> M
+  classDef start rx:14,ry:14

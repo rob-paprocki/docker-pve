@@ -1,0 +1,6 @@
+# Force LF for shell scripts so they remain runnable regardless of each
+# contributor's core.autocrlf setting on Windows.
+* text=auto eol=lf
+
+*.sh  text eol=lf
+*.md  text eol=lf
