@@ -10,6 +10,13 @@ The script builds a new VM each time it runs and leaves existing VMs alone, so a
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-11-24
+**Upgrading:** nothing to do.
+
+### Fixed
+
+- `SECURITY.md` sends every report through GitHub's private vulnerability reporting and says that only the latest release gets fixes. `CONTRIBUTING.md` now says up front that this repository is a release copy, so pull requests are brought across by hand.
+
 ## [4.1.1] - 2026-11-15
 **Upgrading:** nothing to do.
 

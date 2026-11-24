@@ -1,6 +1,8 @@
 # Contributing to docker-pve
 
-Pull requests are welcome. The rules on this page apply to every contributor, whether a person or an agent.
+This repository is a release copy. Development happens elsewhere, and this repository changes only when a new version comes out, one commit per version, so a pull request can't be merged as it is. Open it anyway: I'll bring the change across by hand, credit you in the changelog and close the pull request. The rest of this page still applies to how you prepare it.
+
+The rules on this page apply to every contributor, whether a person or an agent.
 
 To report a security vulnerability, don't open a pull request or a public issue; follow [SECURITY.md](.github/SECURITY.md).
 
