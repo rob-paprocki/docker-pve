@@ -36,7 +36,7 @@ It pairs with [qbittorrent-vpn-docker](https://github.com/rob-paprocki/qbittorre
 - **A root shell** on the Proxmox node. The script refuses to run as another user or through `sudo`. Over SSH it asks you to confirm and suggests the Proxmox web shell instead.
 - **Storage** that accepts VM disk images. If there are several, the script asks which one to use. It needs room for the VM's disk (25 GiB by default).
 - **Free space in the host's temporary folder** (`/tmp`, or `$TMPDIR` if set). It holds the Debian image, about 400 MB to download and bigger once packages are installed, and a resized copy of it.
-- **Host network:** outbound HTTPS to `raw.githubusercontent.com` (this script and `api.func`), `cloud.debian.org` (the image and `SHA512SUMS`; it redirects the image download to a mirror), and `download.docker.com` and the Debian package mirrors (packages installed into the image). If the script has to install `libguestfs-tools`, it also needs the host's own apt repositories.
+- **Host network:** outbound HTTPS to `raw.githubusercontent.com` (this script), `cloud.debian.org` (the image and `SHA512SUMS`; it redirects the image download to a mirror), and `download.docker.com` and the Debian package mirrors (packages installed into the image). If the script has to install `libguestfs-tools`, it also needs the host's own apt repositories.
 - **VM network:** a DHCP server on the VM's bridge, and access to Docker Hub on first boot to pull the Dockhand image (and Dockge's).
 - **Host tools:** `whiptail`, `curl`, `openssl`, `sha512sum`, `qemu-img`, `qm`, `pvesm`, `pvesh` and `pveversion`, all standard on Proxmox VE. If `virt-customize` is missing, the script installs `libguestfs-tools` first.
 
@@ -51,7 +51,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/rob-paprocki/docker-pve/
 Confirm the first prompt, then answer **Yes** to "Use Default Settings?" for a VM with the [defaults](#wizard-options) and a single password prompt, or choose **Advanced** to set everything yourself.
 
 > [!CAUTION]
-> This runs a script from the internet as root on your Proxmox host, and that script sources a second file, `api.func`, from the community-scripts/ProxmoxVE repository. Read both before you run them on a host you care about ([trust model](#trust-model-and-security)). To run a fixed version instead of the moving `main` branch, replace `main` in the URL with a release tag from the [Releases](https://github.com/rob-paprocki/docker-pve/releases) page, such as `v4.0.0`, or with a commit SHA.
+> This runs a script from the internet as root on your Proxmox host. Read it before you run it on a host you care about ([trust model](#trust-model-and-security)). To run a fixed version instead of the moving `main` branch, replace `main` in the URL with a release tag from the [Releases](https://github.com/rob-paprocki/docker-pve/releases) page, such as `v4.0.0`, or with a commit SHA.
 
 ### After it finishes
 
@@ -70,30 +70,14 @@ The script does all its work on the Proxmox host, on a downloaded copy of Debian
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/how-it-works-host-dark.svg">
-  <img alt="Flowchart of what docker-stack-vm.sh does on the Proxmox host, in five steps. First it fetches api.func, asks to proceed, and checks for root, amd64, Proxmox VE 8 or 9, and an SSH session. Then the wizard runs, Default or Advanced, and asks for the storage pool. Next the script downloads the Debian 13 nocloud image and checks it against SHA512SUMS. virt-customize writes the root password, packages, the deploy user, compose files, secrets, initial-startup.service and Docker CE into the image. Last, virt-resize sets the image to your disk size, qm create makes the VM, the disk is imported, and the VM starts if you chose that." src="docs/images/how-it-works-host-light.svg">
+  <img alt="Flowchart of what docker-stack-vm.sh does on the Proxmox host, in five steps. First it asks to proceed and checks for root, amd64, Proxmox VE 8 or 9, and an SSH session. Then the wizard runs, Default or Advanced, and asks for the storage pool. Next the script downloads the Debian 13 nocloud image and checks it against SHA512SUMS. virt-customize writes the root password, packages, the deploy user, compose files, secrets, initial-startup.service and Docker CE into the image. Last, virt-resize sets the image to your disk size, qm create makes the VM, the disk is imported, and the VM starts if you chose that." src="docs/images/how-it-works-host-light.svg">
 </picture>
 
-<details>
-<summary>Diagram source (Mermaid)</summary>
-
-```mermaid
-flowchart TD
-  %% How it works, part 1: docker-stack-vm.sh on the Proxmox host.
-  %% Source for how-it-works-host.svg (and its -light/-dark renders).
-  %% After editing, regenerate them from the repo root: docs/images/render.sh
-  S["On the Proxmox host:<br/>docker-stack-vm.sh"]:::start --> A
-  A["Fetch api.func, ask to<br/>proceed, then check root,<br/>amd64, Proxmox VE 8<br/>or 9, and SSH"] --> B["Wizard: Default or<br/>Advanced, then the<br/>storage pool"]
-  B --> C["Download the Debian 13<br/>nocloud image and check<br/>it against SHA512SUMS"]
-  C --> D["virt-customize: root<br/>password, packages, deploy<br/>user, compose files, secrets,<br/>initial-startup.service,<br/>Docker CE"]
-  D --> E["virt-resize to the chosen<br/>disk size, qm create,<br/>import the disk, start<br/>the VM if you chose to"]
-  classDef start rx:14,ry:14
-```
-
-</details>
+The diagram's Mermaid source is [`docs/images/how-it-works-host.mmd`](docs/images/how-it-works-host.mmd).
 
 On the host, the script:
 
-1. Fetches `api.func`, asks you to confirm, and checks for root, amd64 and Proxmox VE 8 or 9. Over SSH it asks you to confirm again.
+1. Asks you to confirm and checks for root, amd64 and Proxmox VE 8 or 9. Over SSH it asks you to confirm again.
 2. Runs the wizard, then asks which storage pool to use if there's a choice.
 3. Downloads Debian's official 13 (trixie) `nocloud` cloud image, the variant without cloud-init, and checks it against Debian's `SHA512SUMS`.
 4. Uses `virt-customize` to write the root password, packages, `deploy` user, compose files, secrets and `initial-startup.service` into the image, and to install Docker CE and the Compose plugin from Docker's own apt repository.
@@ -104,30 +88,7 @@ On the host, the script:
   <img alt="Flowchart of the first boot in the VM, run by initial-startup.service. It starts Dockge on port 5001 if you chose it, then starts Dockhand on 127.0.0.1 port 3000 and waits for its API. Then comes a question. Does Dockhand refuse an anonymous API request? No means it isn't set up yet, so the unit configures it through the API (Docker environment, /opt/stacks, 04:00 updates, notifications, adopting existing stacks), then creates the admin account and turns authentication on. Yes means an earlier boot already did this. Either way, the same question comes again. Does Dockhand refuse an anonymous API request now? If yes, the unit republishes Dockhand on port 3000, deletes the secrets and disables itself. If no, or if a required call failed during setup, it exits with an error, Dockhand stays on 127.0.0.1, and the unit runs again on the next boot." src="docs/images/how-it-works-vm-light.svg">
 </picture>
 
-<details>
-<summary>Diagram source (Mermaid)</summary>
-
-```mermaid
-flowchart TD
-  %% How it works, part 2: initial-startup.service on the VM's first boot.
-  %% Source for how-it-works-vm.svg (and its -light/-dark renders).
-  %% After editing, regenerate them from the repo root: docs/images/render.sh
-  S["In the VM on first boot:<br/>initial-startup.service"]:::start --> F
-  F["Start Dockge on<br/>port 5001 (only<br/>if you chose it)"] --> G["Start Dockhand<br/>on 127.0.0.1:3000<br/>and wait for<br/>its API"]
-  G --> H{{"Does Dockhand<br/>refuse an<br/>anonymous API<br/>request?"}}
-  H -->|"No: not<br/>set up yet"| I["Configure it<br/>through the API:<br/>Docker<br/>environment,<br/>/opt/stacks,<br/>04:00 updates,<br/>notifications,<br/>adopt existing<br/>stacks"]
-  I --> J["Create the<br/>admin account,<br/>turn<br/>authentication on"]
-  J --> K{{"Does Dockhand<br/>refuse an<br/>anonymous API<br/>request now?"}}
-  H -->|"Yes: an<br/>earlier boot<br/>did this"| K
-  K -->|Yes| L["Republish<br/>Dockhand on<br/>port 3000,<br/>delete the<br/>secrets and<br/>disable the unit"]
-  K -->|No| M["Exit with an<br/>error. Dockhand<br/>stays on<br/>127.0.0.1 and<br/>the unit runs<br/>again on the<br/>next boot"]
-  I -.-> X("A required<br/>call fails")
-  J -.-> X
-  X -.-> M
-  classDef start rx:14,ry:14
-```
-
-</details>
+The diagram's Mermaid source is [`docs/images/how-it-works-vm.mmd`](docs/images/how-it-works-vm.mmd).
 
 On first boot, `initial-startup.service`:
 
@@ -200,12 +161,10 @@ These settings are the same in both modes:
 The script reads these from its environment. Put them before `bash` in the one-liner:
 
 ```bash
-DIAGNOSTICS=no DOCKHAND_IMAGE=registry.example.lan/fnsys/dockhand \
+DOCKHAND_IMAGE=registry.example.lan/fnsys/dockhand \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/rob-paprocki/docker-pve/main/docker-stack-vm.sh)"
 ```
 
-- **`DIAGNOSTICS`**, default unset, which `api.func` treats as `no`. Read by the sourced `api.func`, not by this script. "How do I turn off diagnostics?" in [the FAQ](#troubleshooting-and-faq) explains when anything is uploaded.
-- **`API_FUNC_REF`**, default `500a860faf7295e6dad20670d05e6400d18f66b0`. The [community-scripts/ProxmoxVE](https://github.com/community-scripts/ProxmoxVE) commit whose `misc/api.func` is fetched and sourced. The script exits if the fetch fails or comes back empty.
 - **`DOCKHAND_IMAGE`**, default `fnsys/dockhand`. The Dockhand image written into `/opt/dockhand/compose.yaml`, without the tag. Point it at a copy in your own registry if the VM can't reach Docker Hub.
 - **`DOCKHAND_TAG`**, default `v1.0.57`. The Dockhand image tag. First boot configures Dockhand through its HTTP API, so a tag that changes that API makes first boot fail, and Dockhand then stays on `127.0.0.1`.
 - **`DOCKGE_TAG`**, default `1.5.0`. The `louislam/dockge` image tag, used only when you install Dockge.
@@ -256,13 +215,12 @@ Dockhand doesn't update itself on that schedule. It shows a new release in its s
 Several remote inputs go into the VM. Before you run this on infrastructure you care about, look at where each one comes from and how it's checked:
 
 - **This script**, from `raw.githubusercontent.com/rob-paprocki/docker-pve`: HTTPS only. Pin the URL to a commit if you don't want the moving `main`.
-- **`api.func`**, from `raw.githubusercontent.com/community-scripts/ProxmoxVE` at `API_FUNC_REF`: pinned to a commit, so a change on that repository's `main` can't reach you silently. The script exits if the fetch fails.
 - **The Debian 13 `nocloud` image**, from `cloud.debian.org/images/cloud/trixie/latest/`: checked against the published `SHA512SUMS`, which covers integrity only. Debian's cloud team doesn't sign per-distribution images consistently, so GPG verification is deferred and authenticity rests on HTTPS to `cloud.debian.org`.
 - **Docker CE packages**, from `download.docker.com`: Docker's apt signing key, itself fetched over HTTPS during the build.
 - **Debian packages**, from the Debian mirrors configured in the image: Debian's archive signatures.
 - **The Dockhand and Dockge images**, from Docker Hub on first boot: pinned by tag, not by digest.
 
-`api.func` provides the two telemetry functions this script calls, `post_to_api_vm` and `post_update_to_api`. Because it's sourced, its code runs as root in the script's shell, which is why it's pinned. At the pinned commit, those functions post to `telemetry.community-scripts.org` only when `DIAGNOSTICS` isn't `no` and a session ID, `RANDOM_UUID`, is set. This script never sets `RANDOM_UUID`, so nothing is uploaded unless your shell already exports one.
+Nothing else is sourced into the script, and it sends no telemetry.
 
 ### First-boot lock-down
 
@@ -338,21 +296,6 @@ A URL Dockhand rejects at first boot only logs a warning. In Default mode there'
 </details>
 
 <details>
-<summary>How do I turn off diagnostics?</summary>
-
-As shipped, this script uploads nothing. The pinned `api.func` posts only when `DIAGNOSTICS` isn't `no` (unset counts as `no`) and a session ID, `RANDOM_UUID`, is set, and this script never sets `RANDOM_UUID`. An upload could only happen if your shell already exports `RANDOM_UUID` and `DIAGNOSTICS` is set to something other than `no`.
-
-To rule that out, or if you point `API_FUNC_REF` at a newer commit (check what that version sends first), prefix the one-liner with `DIAGNOSTICS=no`:
-
-```bash
-DIAGNOSTICS=no bash -c "$(curl -fsSL https://raw.githubusercontent.com/rob-paprocki/docker-pve/main/docker-stack-vm.sh)"
-```
-
-If `/usr/local/community-scripts/diagnostics` exists on the host, its `DIAGNOSTICS=` line replaces the environment value, so set it to `no` there too.
-
-</details>
-
-<details>
 <summary>How do I get a shell on the VM?</summary>
 
 Log in as root with the root password on the VM's **Console** in Proxmox. Over SSH, OpenSSH's default (`PermitRootLogin prohibit-password`) refuses root password logins, so:
@@ -385,7 +328,7 @@ Dockhand: click the new release in Dockhand's sidebar, then set the same tag in 
 <details>
 <summary>The script stopped with an error. What's left behind?</summary>
 
-If the error came after the VM was created, the script stops and destroys that VM. Pressing Ctrl+C doesn't, so look for a half-built VM if you interrupt a run. The temporary folder with the image and passwords is removed on every exit. Errors before that (a failed `api.func` fetch, a `SHA512SUMS` mismatch, no usable storage) leave nothing to clean up. Fix the cause and run the one-liner again.
+If the error came after the VM was created, the script stops and destroys that VM. Pressing Ctrl+C doesn't, so look for a half-built VM if you interrupt a run. The temporary folder with the image and passwords is removed on every exit. Errors before that (a `SHA512SUMS` mismatch, no usable storage) leave nothing to clean up. Fix the cause and run the one-liner again.
 
 </details>
 
@@ -399,9 +342,9 @@ Since 4.0.0 the script installs Dockhand instead of both, with Dockge as an opti
 ## Known limitations
 
 - No static IP prompt. It needs the `genericcloud` image and cloud-init.
-- No GPG check of the Debian image, until Debian's cloud team signs per-distribution images. The monthly [external-upstream-watch](.github/workflows/external-upstream-watch.yml) workflow opens an issue when a signature file appears. It opens another when `api.func` on community-scripts' `main` has commits from the last 35 days other than the pinned one; it doesn't compare against everything since the pin.
+- No GPG check of the Debian image, until Debian's cloud team signs per-distribution images. The monthly [external-upstream-watch](.github/workflows/external-upstream-watch.yml) workflow opens an issue when a signature file appears.
 - amd64 only. The script exits on other architectures, such as Proxmox on ARM (PiMox).
-- Each run downloads the current `trixie/latest` image and the current Docker CE packages, so two runs weeks apart can produce slightly different VMs. Only `api.func` and the two container images are pinned; [UPSTREAMS.md](UPSTREAMS.md) lists each pin and how to bump it.
+- Each run downloads the current `trixie/latest` image and the current Docker CE packages, so two runs weeks apart can produce slightly different VMs. Only the two container images are pinned; [UPSTREAMS.md](UPSTREAMS.md) lists each pin and how to bump it.
 - Testing so far: CI runs `shellcheck` on every pull request. For 4.0.0, the first-boot script was run against `fnsys/dockhand:v1.0.57` on a plain Docker host (fresh installs with and without Dockge and notifications, a re-run, recovery from an interrupted first boot, a rejected password). No pull request records a full run on Proxmox VE, so the supported versions come from the script's version check, not from a test matrix.
 
 ## Getting help
@@ -426,14 +369,14 @@ Only the current `main` branch gets fixes; there are no backported releases ([SE
 
 ## Licence
 
-MIT; see [LICENSE](LICENSE). The whiptail UI pattern, the `get_valid_nextid` helper and the `api.func` sourcing are adapted from the [community-scripts/ProxmoxVE](https://github.com/community-scripts/ProxmoxVE) project, copyright © 2021-2025 community-scripts ORG; that notice is kept in the header of `docker-stack-vm.sh`. All additions in this script are copyright © 2025 Rob Paprocki.
+MIT; see [LICENSE](LICENSE). The whiptail UI pattern and the `get_valid_nextid` helper are adapted from the [community-scripts/ProxmoxVE](https://github.com/community-scripts/ProxmoxVE) project, copyright © 2021-2025 community-scripts ORG; that notice is kept in the header of `docker-stack-vm.sh`. All additions in this script are copyright © 2025 Rob Paprocki.
 
 The MIT licence covers this repository only. Dockhand and Dockge are separate projects under their own licences ([Dockhand's](#dockhands-licence) is not open source).
 
 ## Credits
 
 - Maintained by [Rob Paprocki](https://github.com/rob-paprocki).
-- [community-scripts/ProxmoxVE](https://github.com/community-scripts/ProxmoxVE), for the helper-script pattern this script follows and the `api.func` it sources.
+- [community-scripts/ProxmoxVE](https://github.com/community-scripts/ProxmoxVE), for the helper-script pattern this script follows.
 - [Dockhand](https://github.com/Finsys/dockhand) by Finsys, and [Dockge](https://github.com/louislam/dockge) by Louis Lam.
 - The [Debian Cloud Team](https://cloud.debian.org/images/cloud/), for the cloud images.
 - [libguestfs](https://libguestfs.org/), for `virt-customize` and `virt-resize`.

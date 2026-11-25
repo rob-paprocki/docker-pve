@@ -10,6 +10,14 @@ The script builds a new VM each time it runs and leaves existing VMs alone, so a
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-25
+**Upgrading:** nothing to do. If you set `DIAGNOSTICS` or `API_FUNC_REF`, you can remove them; the script ignores both now.
+
+### Changed
+
+- The script no longer downloads `api.func` from community-scripts/ProxmoxVE or calls its telemetry functions, so it runs no outside code on the host and has no upload path. community-scripts deleted that file on 2026-10-31. Setting `DIAGNOSTICS` or `API_FUNC_REF` has no effect now.
+- The README's diagrams link to their Mermaid source files in `docs/images/`. The collapsed copy of the source under each diagram is gone.
+
 ## [4.1.2] - 2026-11-24
 **Upgrading:** nothing to do.
 

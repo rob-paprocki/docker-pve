@@ -7,7 +7,7 @@ Two moving parts handle the automation:
 - Dependabot auto-bumps the two things it can parse here: GitHub Actions versions in `.github/workflows/*.yml` and the diagram tools in `docs/images/`. It groups non-major bumps on one Monday PR, and the bumps ship with the next release.
 - [`.github/workflows/label-major-bumps.yml`](.github/workflows/label-major-bumps.yml) adds the `breaking-candidate` label to any Dependabot PR crossing a major-version boundary. That label fires [`.github/workflows/claude-breaking-review.yml`](.github/workflows/claude-breaking-review.yml), which has Claude read the upstream changelog, grep this repo for the specific symbols flagged, and comment with a `REAL / NOT / UNCLEAR` verdict.
 
-Dependabot does not read bash scripts, so the two Docker image tags encoded as `${VAR:-default}` inside `docker-stack-vm.sh` are **hand-bumped**. The monthly [`.github/workflows/external-upstream-watch.yml`](.github/workflows/external-upstream-watch.yml) files GitHub issues when the two externally-blocked items are ready (Debian starts signing cloud images, `community-scripts/api.func` drifts). For the other image tags, this file is the companion recipe: each section below has the source link, the breaking signals, and the hand-bump steps.
+Dependabot does not read bash scripts, so the two Docker image tags encoded as `${VAR:-default}` inside `docker-stack-vm.sh` are **hand-bumped**. The monthly [`.github/workflows/external-upstream-watch.yml`](.github/workflows/external-upstream-watch.yml) opens a GitHub issue when the one externally-blocked item is ready (Debian starts signing cloud images). For the other image tags, this file is the companion recipe: each section below has the source link, the breaking signals, and the hand-bump steps.
 
 ## Container images (hand-bumped)
 
@@ -45,14 +45,6 @@ The following tags live inside `docker-stack-vm.sh` as `${VAR:-default}` bash de
 - **Verified against:** published `SHA512SUMS` at the same path. GPG signature verification is not done; the Debian cloud team does not sign per-distribution images consistently. The monthly `external-upstream-watch` workflow checks for a signature file to appear.
 - **Breaking signals:** a next-release name change (`trixie` → whatever the next stable codename is) would need the URL template updated. SHA512 verification fails hard on any mismatch, so a corrupt or substituted image won't silently install.
 - **Bump by hand:** nothing to do unless Debian changes the release codename, in which case update `URL` in `docker-stack-vm.sh`.
-
-### `community-scripts/ProxmoxVE` `api.func`
-
-- **Pinned at:** `API_FUNC_REF` default commit SHA (currently `500a860faf7295e6dad20670d05e6400d18f66b0`)
-- **Source:** [`community-scripts/ProxmoxVE`](https://github.com/community-scripts/ProxmoxVE), file `misc/api.func`
-- **Verified against:** the two functions this script uses (`post_to_api_vm`, `post_update_to_api`) by grep before pinning.
-- **Breaking signals:** a rename or removal of either function; under `set -e` the script would exit immediately on first call. The monthly `external-upstream-watch` workflow lists new commits touching `misc/api.func` since the pin and opens an issue when it finds any.
-- **Bump by hand:** fetch the raw file at the candidate SHA, confirm both functions still exist, update `API_FUNC_REF`.
 
 ### GitHub Actions
 

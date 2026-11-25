@@ -4,28 +4,13 @@
 # Docker + Dockhand (Dockge optional).
 #
 # Adapted from the community-scripts/ProxmoxVE helper-script pattern
-# (https://github.com/community-scripts/ProxmoxVE), the whiptail UI,
-# get_valid_nextid helper, and api.func sourcing come from that project.
+# (https://github.com/community-scripts/ProxmoxVE), the whiptail UI and
+# get_valid_nextid helper come from that project.
 #
 # Copyright (c) 2021-2025 community-scripts ORG
 # Copyright (c) 2025 Rob Paprocki
 # Co-Author: Google Gemini
 # License: MIT (see LICENSE)
-#
-# WARNING: this script sources community-scripts/ProxmoxVE main-branch bash
-# at runtime (api.func, for anonymous telemetry). The README documents the
-# trust model; set DIAGNOSTICS=no in the environment to disable the uploads.
-
-# Pinned to a specific commit so a compromise or breaking change on main
-# cannot land here silently. Verified to carry post_to_api_vm and
-# post_update_to_api (the only two functions this script calls). Bump
-# deliberately after reviewing the diff on community-scripts/ProxmoxVE.
-API_FUNC_REF="${API_FUNC_REF:-500a860faf7295e6dad20670d05e6400d18f66b0}"
-API_FUNC_SRC=$(curl -fsSL "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/${API_FUNC_REF}/misc/api.func") \
-  || { echo "ERROR: could not fetch community-scripts/ProxmoxVE api.func at ${API_FUNC_REF}" >&2; exit 1; }
-[ -n "$API_FUNC_SRC" ] || { echo "ERROR: api.func fetch returned empty payload" >&2; exit 1; }
-source /dev/stdin <<< "$API_FUNC_SRC"
-unset API_FUNC_SRC
 
 function header_info() {
   clear
@@ -99,14 +84,13 @@ THIN="discard=on,ssd=1,"
 set -Eeuo pipefail
 trap 'error_handler $LINENO "$BASH_COMMAND"' ERR
 trap cleanup EXIT
-trap 'post_update_to_api "failed" "INTERRUPTED"; exit 130' SIGINT
-trap 'post_update_to_api "failed" "TERMINATED"; exit 143' SIGTERM
+trap 'exit 130' SIGINT
+trap 'exit 143' SIGTERM
 function error_handler() {
   local exit_code="$?"
   local line_number="$1"
   local command="$2"
   local error_message="${RD}[ERROR]${CL} in line ${RD}$line_number${CL}: exit code ${RD}$exit_code${CL}: while executing command ${YW}$command${CL}"
-  post_update_to_api "failed" "${command}"
   echo -e "\n$error_message\n"
   cleanup_vmid
 }
@@ -137,7 +121,6 @@ function cleanup_vmid() {
 
 function cleanup() {
   popd &>/dev/null || true
-  command -v post_update_to_api &>/dev/null && post_update_to_api "done" "none" || true
   [ -n "${TEMP_DIR:-}" ] && rm -rf "$TEMP_DIR"
 }
 
@@ -474,7 +457,6 @@ else
 fi
 
 start_script
-post_to_api_vm
 
 msg_info "Validating Storage"
 while read -r line; do
@@ -880,5 +862,4 @@ if [ "$START_VM" == "yes" ]; then
   qm start $VMID
   msg_ok "Started Docker VM"
 fi
-post_update_to_api "done" "none"
 msg_ok "Completed Successfully!\n"

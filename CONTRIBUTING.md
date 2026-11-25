@@ -29,7 +29,7 @@ Planned work is in [ROADMAP.md](ROADMAP.md), with an issue for each item.
 - Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user could notice, under `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security`. Breaking changes start with **Breaking** and say how to adapt. Each release section opens with an `**Upgrading:**` line: either `**Upgrading:** nothing to do.` or the steps to take. CI-only and housekeeping changes can skip it.
 - When you change behaviour, update the README in the same pull request. To change a diagram, edit its `.mmd` source in `docs/images/` and regenerate the images as [Images and diagrams](#images-and-diagrams) describes.
 - Read user-facing text again after writing it: cut filler and stock phrases, then re-check every fact (versions, ports, paths, commands, defaults) against the script.
-- To bump a pinned image or `api.func`, follow [UPSTREAMS.md](UPSTREAMS.md). Dependabot covers GitHub Actions versions and the diagram tools, and those bumps ship with releases; the rest is done by hand.
+- To bump a pinned image, follow [UPSTREAMS.md](UPSTREAMS.md). Dependabot covers GitHub Actions versions and the diagram tools, and those bumps ship with releases; the rest is done by hand.
 
 ## What counts as breaking
 
@@ -37,7 +37,7 @@ The version protects what people rely on when they run the script:
 
 - the one-liner in the README and the script's name and path (`docker-stack-vm.sh`);
 - the wizard: its modes (Default and Advanced), prompts, choices and defaults;
-- the environment variables it reads: `DIAGNOSTICS`, `API_FUNC_REF`, `DOCKHAND_IMAGE`, `DOCKHAND_TAG`, `DOCKGE_TAG`;
+- the environment variables it reads: `DOCKHAND_IMAGE`, `DOCKHAND_TAG`, `DOCKGE_TAG`;
 - what the VM it creates contains: the installed services and their ports (Dockhand 3000, Dockge 5001), the `deploy` user (uid 1000, in the `docker` group), the paths `/opt/stacks`, `/opt/dockhand` and `/opt/stacks/dockge`, and the first-boot behaviour of `initial-startup.service`;
 - what the paired [qbittorrent-vpn-docker](https://github.com/rob-paprocki/qbittorrent-vpn-docker) stack depends on: the `/opt/stacks` location, uid and gid 1000, and `git` and `python3-venv` on the VM.
 
